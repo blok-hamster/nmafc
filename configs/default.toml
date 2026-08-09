@@ -1,0 +1,41 @@
+[storage]
+hot_uri = "./data/lancedb"
+cold_uri = "./data/cold.db"
+
+[decay]
+lambda_core_anchor = 0.0
+lambda_active_context = 0.05
+lambda_ephemeral = 0.69
+eta = 0.15
+gamma = 0.1
+w_prune = 0.1
+
+[retrieval]
+theta = 0.75
+top_k = 10
+fallback_keyword_limit = 20
+
+[time]
+unit = "turns"
+
+[embedding]
+# Format: "provider/model"
+# Examples: "openai/text-embedding-3-small", "ollama/nomic-embed-text"
+provider_model = "openai/text-embedding-3-small"
+dim = 1536
+
+[llm]
+# Format: "provider/model"
+# Supported providers: openai, anthropic, groq, openrouter, together, ollama, lmstudio, vllm, azure, bedrock
+# Examples:
+#   "openai/gpt-4o-mini"
+#   "anthropic/claude-sonnet-4-20250514"
+#   "groq/llama-3.1-70b-versatile"
+#   "openrouter/anthropic/claude-sonnet-4-20250514"
+#   "ollama/llama3"
+#   "together/meta-llama/Llama-3-70b-chat-hf"
+#   "lmstudio/local-model"
+#   "vllm/meta-llama/Llama-3-8b"
+#   "azure/my-gpt4-deployment"          (requires AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY)
+#   "bedrock/anthropic.claude-3-sonnet-20240229-v1:0"  (requires AWS credentials)
+provider_model = "openai/gpt-4o-mini"
