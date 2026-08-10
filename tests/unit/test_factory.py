@@ -167,11 +167,11 @@ class TestCreateAzureProvider:
 
 @pytest.mark.skipif(not HAS_BOTO3, reason="boto3 package not installed")
 class TestCreateBedrockProvider:
-    def test_bedrock_llm_provider(self):
+    def test_bedrock_anthropic_provider(self):
         provider = create_llm_provider("bedrock/anthropic.claude-3-sonnet-20240229-v1:0")
-        from nmafc.integration.bedrock_provider import BedrockProvider
+        from nmafc.integration.bedrock_provider import BedrockAnthropicProvider
 
-        assert isinstance(provider, BedrockProvider)
+        assert isinstance(provider, BedrockAnthropicProvider)
         assert provider._model_id == "anthropic.claude-3-sonnet-20240229-v1:0"
 
     def test_bedrock_embedding_provider(self):
@@ -184,9 +184,9 @@ class TestCreateBedrockProvider:
     def test_bedrock_custom_region(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("AWS_REGION", "eu-west-1")
         provider = create_llm_provider("bedrock/anthropic.claude-3-haiku-20240307-v1:0")
-        from nmafc.integration.bedrock_provider import BedrockProvider
+        from nmafc.integration.bedrock_provider import BedrockAnthropicProvider
 
-        assert isinstance(provider, BedrockProvider)
+        assert isinstance(provider, BedrockAnthropicProvider)
 
 
 class TestNMafcConfigProviderFields:

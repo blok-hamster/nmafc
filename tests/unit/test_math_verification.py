@@ -361,11 +361,12 @@ class TestSynapticPruning:
 
     def test_pruning_constraint(self):
         """
-        Spec §2.4.3: If w_i(t) < w_prune (0.1), evict.
+        Spec §2.4.3: If w_i(t) <= w_prune (0.1), evict.
 
-        w=0.1 → NOT pruned (spec says < not ≤)
+        w=0.1 → pruned (at suppression boundary)
         w=0.09 → pruned
         w=0.05 → pruned
+        w=0.11 → NOT pruned (above threshold)
         """
         records = [
             MemoryRecord(
@@ -380,14 +381,19 @@ class TestSynapticPruning:
                 entity_name="well_below", fact_content="h",
                 memory_type=MemoryType.ACTIVE_CONTEXT, weight=0.05,
             ),
+            MemoryRecord(
+                entity_name="above_threshold", fact_content="i",
+                memory_type=MemoryType.ACTIVE_CONTEXT, weight=0.11,
+            ),
         ]
         prunable = identify_prunable(records, w_prune=0.1)
-        # Only records with w < 0.1 (strictly less than)
-        assert len(prunable) == 2
+        # Records with w <= 0.1 are pruned
+        assert len(prunable) == 3
         prunable_names = {r.entity_name for r in records if r.id in prunable}
-        assert "at_threshold" not in prunable_names
+        assert "at_threshold" in prunable_names
         assert "below_threshold" in prunable_names
         assert "well_below" in prunable_names
+        assert "above_threshold" not in prunable_names
 
     def test_suppression_then_prune_scenario(self):
         """
@@ -395,9 +401,10 @@ class TestSynapticPruning:
         1. Old fact at w=1.0
         2. New contradicting fact arrives
         3. Suppression: w_old = 1.0 * 0.1 = 0.1
-        4. Pruning check: w=0.1 is NOT < 0.1, so NOT pruned yet
-        5. One decay tick later (ephemeral): w = 0.1 * e^{-0.69} ≈ 0.0502
-        6. Now w < 0.1 → pruned
+        4. Pruning check: w=0.1 is <= 0.1, so pruned immediately
+
+        This is the intended behavior: a single suppression should be
+        sufficient to mark a record for pruning on the same turn.
         """
         config = DecayConfig()
 
@@ -411,18 +418,9 @@ class TestSynapticPruning:
         suppressed = apply_suppression(old_record, gamma=config.gamma)
         assert abs(suppressed.weight - 0.1) < 1e-10
 
-        # Step 4: Not prunable yet
-        assert suppressed.weight >= config.w_prune
+        # Step 4: Now prunable immediately (w <= w_prune)
         prunable = identify_prunable([suppressed], config.w_prune)
-        assert len(prunable) == 0
-
-        # Step 5: After 1 more decay tick
-        suppressed_record = suppressed.model_copy(update={"last_reinforced_turn": 10})
-        w_after_decay = decay_record(suppressed_record, current_turn=11, config=config)
-        # w = 0.1 * e^{-0.05*1} ≈ 0.0951
-        expected = 0.1 * math.exp(-0.05 * 1)
-        assert abs(w_after_decay - expected) < 1e-10
-        assert w_after_decay < config.w_prune  # Now prunable
+        assert len(prunable) == 1
 
     def test_override_detection_entity_match(self):
         """

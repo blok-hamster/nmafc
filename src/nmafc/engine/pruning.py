@@ -32,7 +32,7 @@ def apply_suppression(record: MemoryRecord, gamma: float) -> MemoryRecord:
 
 def identify_prunable(records: list[MemoryRecord], w_prune: float) -> list[str]:
     """Return IDs of records whose weight has fallen below the prune threshold."""
-    return [r.id for r in records if r.weight < w_prune]
+    return [r.id for r in records if r.weight <= w_prune]
 
 
 def prune_cycle(
@@ -47,8 +47,8 @@ def prune_cycle(
     in the Cold ROM as inactive events (preserving the audit trail).
     Returns the count of pruned records.
     """
-    all_mutable = hot.get_all_mutable()
-    prunable_ids = identify_prunable(all_mutable, w_prune)
+    all_records = hot.get_all()
+    prunable_ids = identify_prunable(all_records, w_prune)
 
     for record_id in prunable_ids:
         hot.delete(record_id)

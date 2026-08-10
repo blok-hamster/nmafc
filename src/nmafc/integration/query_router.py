@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from nmafc.engine.reinforcement import reinforce
 from nmafc.integration.base import EmbeddingProvider
-from nmafc.schemas.memory import DecayConfig, MemoryRecord, SearchResult
+from nmafc.schemas.memory import DecayConfig, MemoryRecord, MemoryType
 from nmafc.storage.cold import ColdStorage
 from nmafc.storage.hot import HotStorage
 
@@ -58,6 +58,10 @@ class QueryRouter:
                 ]
 
         for result in results:
+            if result.record.weight <= self._config.gamma:
+                continue
+            if result.record.memory_type == MemoryType.EPHEMERAL_STATE:
+                continue
             reinforced = reinforce(result.record, current_turn)
             self._hot.update_reinforcement(
                 reinforced.id,
@@ -65,7 +69,7 @@ class QueryRouter:
                 turn=current_turn,
             )
 
-        return [r.record for r in results]
+        return [r.record for r in results if r.record.weight > self._config.gamma]
 
     def format_context(self, records: list[MemoryRecord]) -> str:
         """Format retrieved memories as a context string for the LLM."""

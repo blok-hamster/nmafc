@@ -21,33 +21,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from nmafc.integration.base import EmbeddingProvider
 from nmafc.integration.bedrock_provider import BedrockAnthropicProvider
+from nmafc.integration.factory import create_embedding_provider
 from nmafc.schemas.memory import DecayConfig, MemoryType
 from nmafc.storage.config import NMafcConfig, StorageConfig
 from nmafc.wrapper import NeuromorphicMemory
-
-
-class DeterministicEmbedding(EmbeddingProvider):
-    """Hash-based embedder for smoke testing (no API call needed)."""
-
-    def __init__(self, dim: int = 384) -> None:
-        self._dim = dim
-
-    async def embed(self, texts: list[str]) -> list[list[float]]:
-        import hashlib
-
-        results = []
-        for text in texts:
-            h = hashlib.sha512(text.encode()).digest()
-            while len(h) < self._dim:
-                h += hashlib.sha512(h).digest()
-            raw = [((b % 200) - 100) / 100.0 for b in h[: self._dim]]
-            norm = sum(x * x for x in raw) ** 0.5
-            if norm == 0:
-                norm = 1.0
-            results.append([x / norm for x in raw])
-        return results
 
 
 CONVERSATION = [
@@ -79,7 +57,7 @@ async def run_smoke_test() -> None:
             storage=StorageConfig(
                 hot_uri=str(Path(tmpdir) / "lancedb"),
                 cold_uri=str(Path(tmpdir) / "cold.db"),
-                embedding_dim=384,
+                embedding_dim=768,
             ),
             decay=DecayConfig(),
         )
@@ -89,7 +67,7 @@ async def run_smoke_test() -> None:
             region=region,
             api_key=api_key,
         )
-        embedder = DeterministicEmbedding(dim=384)
+        embedder = create_embedding_provider("ollama/nomic-embed-text")
 
         mem = NeuromorphicMemory(
             llm_provider=llm,
