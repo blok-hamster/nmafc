@@ -21,6 +21,7 @@ SCHEMA = pa.schema([
     pa.field("consolidation_index", pa.int32()),
     pa.field("created_at_turn", pa.int32()),
     pa.field("last_reinforced_turn", pa.int32()),
+    pa.field("related_entities", pa.list_(pa.string())),
 ])
 
 
@@ -49,6 +50,7 @@ class HotStorage:
                 pa.field("consolidation_index", pa.int32()),
                 pa.field("created_at_turn", pa.int32()),
                 pa.field("last_reinforced_turn", pa.int32()),
+                pa.field("related_entities", pa.list_(pa.string())),
             ])
             self._db.create_table(TABLE_NAME, schema=schema)
         self._table = self._db.open_table(TABLE_NAME)
@@ -68,6 +70,7 @@ class HotStorage:
             "consolidation_index": record.consolidation_index,
             "created_at_turn": record.created_at_turn,
             "last_reinforced_turn": record.last_reinforced_turn,
+            "related_entities": list(record.related_entities),
         }
         self._table.add([row])
 
@@ -77,18 +80,8 @@ class HotStorage:
         for row in results:
             distance = row.get("_distance", 0.0)
             score = max(0.0, min(1.0, 1.0 - distance))
-
-            record = MemoryRecord(
-                id=row["id"],
-                entity_name=row["entity_name"],
-                fact_content=row["fact_content"],
-                memory_type=MemoryType(row["memory_type"]),
-                weight=row["weight"],
-                consolidation_index=row["consolidation_index"],
-                created_at_turn=row["created_at_turn"],
-                last_reinforced_turn=row["last_reinforced_turn"],
-            )
-            search_results.append(SearchResult(record=record, score=score))
+            record = self._row_to_record(row)
+            search_results.append(SearchResult(record=record, score=score, hops=0))
         return search_results
 
     def get_by_entity(self, entity_name: str) -> list[MemoryRecord]:
@@ -96,6 +89,18 @@ class HotStorage:
             self._table.search()
             .where(f"entity_name = '{entity_name}'")
             .limit(100)
+            .to_list()
+        )
+        return [self._row_to_record(r) for r in results]
+
+    def get_by_entities(self, entity_names: list[str]) -> list[MemoryRecord]:
+        if not entity_names:
+            return []
+        quoted = ", ".join(f"'{name}'" for name in set(entity_names))
+        results = (
+            self._table.search()
+            .where(f"entity_name IN ({quoted})")
+            .limit(500)
             .to_list()
         )
         return [self._row_to_record(r) for r in results]
@@ -152,6 +157,14 @@ class HotStorage:
         return self._row_to_record(results[0])
 
     def _row_to_record(self, row: dict) -> MemoryRecord:
+        rel = row.get("related_entities")
+        if rel is None:
+            rel_list = []
+        elif hasattr(rel, "tolist"):
+            rel_list = rel.tolist()
+        else:
+            rel_list = list(rel)
+
         return MemoryRecord(
             id=row["id"],
             entity_name=row["entity_name"],
@@ -161,4 +174,6 @@ class HotStorage:
             consolidation_index=row["consolidation_index"],
             created_at_turn=row["created_at_turn"],
             last_reinforced_turn=row["last_reinforced_turn"],
+            related_entities=rel_list,
         )
+

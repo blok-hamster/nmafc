@@ -33,19 +33,22 @@ class QueryRouter:
         query: str,
         current_turn: int,
     ) -> list[MemoryRecord]:
-        """Retrieve relevant memories for the given query.
+        """Retrieve relevant memories for the given query using Spreading Activation.
 
-        Applies spaced repetition (LTP) to all retrieved records as a side effect.
+        1. Performs top_k vector similarity search in Hot RAM (Hop 0).
+        2. Traverses graph pointers (related_entities) up to max_hops (Default: 2-hops).
+        3. Falls back to Cold ROM keyword search if initial vector hits are weak.
+        4. Applies spaced repetition (LTP reinforcement) to all retrieved records.
         """
         query_embedding = await self._embedder.embed_single(query)
 
-        results = self._hot.search(query_embedding, top_k=self._config.top_k)
+        vector_hits = self._hot.search(query_embedding, top_k=self._config.top_k)
 
-        if not results or results[0].score < self._config.theta:
+        if not vector_hits or vector_hits[0].score < self._config.theta:
             cold_results = self._cold.keyword_search(
                 query, limit=self._config.fallback_keyword_limit
             )
-            if cold_results and not results:
+            if cold_results and not vector_hits:
                 return [
                     MemoryRecord(
                         entity_name=r["entity_name"],
@@ -57,19 +60,61 @@ class QueryRouter:
                     for r in cold_results
                 ]
 
-        for result in results:
-            if result.record.weight <= self._config.gamma:
-                continue
-            if result.record.memory_type == MemoryType.EPHEMERAL_STATE:
-                continue
-            reinforced = reinforce(result.record, current_turn)
-            self._hot.update_reinforcement(
-                reinforced.id,
-                new_k=reinforced.consolidation_index,
-                turn=current_turn,
-            )
+        # Spreading Activation Graph Traversal
+        visited_ids: set[str] = set()
+        visited_entities: set[str] = set()
+        active_records: list[MemoryRecord] = []
 
-        return [r.record for r in results if r.record.weight > self._config.gamma]
+        # Hop 0: Vector Search Hits
+        frontier_entities: set[str] = set()
+        for hit in vector_hits:
+            rec = hit.record
+            if rec.id not in visited_ids:
+                visited_ids.add(rec.id)
+                visited_entities.add(rec.entity_name.lower())
+                active_records.append(rec)
+                for rel in rec.related_entities:
+                    frontier_entities.add(rel.lower())
+
+        # Hop 1 to max_hops Spreading Activation
+        current_hop = 0
+        max_hops = getattr(self._config, "max_hops", 2)
+
+        while current_hop < max_hops and frontier_entities:
+            current_hop += 1
+            unvisited = [e for e in frontier_entities if e not in visited_entities]
+            if not unvisited:
+                break
+
+            neighbors = self._hot.get_by_entities(unvisited)
+            frontier_entities = set()
+
+            for rec in neighbors:
+                if rec.id not in visited_ids:
+                    visited_ids.add(rec.id)
+                    visited_entities.add(rec.entity_name.lower())
+                    active_records.append(rec)
+                    for rel in rec.related_entities:
+                        if rel.lower() not in visited_entities:
+                            frontier_entities.add(rel.lower())
+
+        # Apply Long-Term Potentiation (LTP) Reinforcement to retrieved records
+        final_records: list[MemoryRecord] = []
+        for rec in active_records:
+            if rec.weight <= self._config.gamma:
+                continue
+
+            final_records.append(rec)
+
+            if rec.memory_type != MemoryType.EPHEMERAL_STATE:
+                reinforced = reinforce(rec, current_turn)
+                self._hot.update_reinforcement(
+                    reinforced.id,
+                    new_k=reinforced.consolidation_index,
+                    turn=current_turn,
+                )
+
+        return final_records
 
     def format_context(self, records: list[MemoryRecord]) -> str:
         """Format retrieved memories as a context string for the LLM."""

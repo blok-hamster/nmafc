@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from nmafc.engine.consolidation import MemoryConsolidator
 from nmafc.engine.decay import decay_all
 from nmafc.engine.pruning import apply_suppression, detect_override, prune_cycle
 from nmafc.integration.base import EmbeddingProvider, LLMProvider
@@ -17,7 +18,8 @@ class NeuromorphicMemory:
     """Top-level neuromorphic memory wrapper for LLM agents.
 
     Orchestrates real-time state extraction, dual-track storage,
-    cognitive decay, spaced repetition, and active pruning.
+    cognitive decay, spaced repetition, graph spreading activation,
+    and active pruning.
     """
 
     def __init__(
@@ -40,6 +42,9 @@ class NeuromorphicMemory:
         self._extractor = StateExtractor(llm_provider)
         self._router = QueryRouter(
             self._hot, self._cold, self._embedder, self._decay_config
+        )
+        self._consolidator = MemoryConsolidator(
+            self._hot, self._cold, self._decay_config
         )
 
     @classmethod
@@ -76,11 +81,12 @@ class NeuromorphicMemory:
         """Process a single conversation turn through the full neuromorphic pipeline.
 
         1. Increment turn counter
-        2. Retrieve relevant context from Hot RAM
+        2. Retrieve relevant context from Hot RAM (using Spreading Activation)
         3. Generate response + extract state updates via LLM
         4. Process each update: log to Cold ROM, detect overrides, upsert to Hot RAM
         5. Run decay on all mutable records
         6. Prune below-threshold records
+        7. Trigger auto-consolidation if interval threshold reached
 
         Returns the assistant's response text.
         """
@@ -102,6 +108,10 @@ class NeuromorphicMemory:
 
         prune_cycle(self._hot, self._cold, self._decay_config.w_prune, self._current_turn)
 
+        auto_interval = getattr(self._decay_config, "auto_consolidate_turns", 5)
+        if auto_interval > 0 and self._current_turn % auto_interval == 0:
+            self._consolidator.consolidate(self._current_turn)
+
         return response_text
 
     async def ingest_updates(self, updates: list[MemoryStateUpdate]) -> None:
@@ -113,6 +123,14 @@ class NeuromorphicMemory:
         await self._process_updates(UnifiedMemoryPayload(updates=updates))
         self._run_decay()
         prune_cycle(self._hot, self._cold, self._decay_config.w_prune, self._current_turn)
+
+        auto_interval = getattr(self._decay_config, "auto_consolidate_turns", 5)
+        if auto_interval > 0 and self._current_turn % auto_interval == 0:
+            self._consolidator.consolidate(self._current_turn)
+
+    async def consolidate(self) -> int:
+        """Manually invoke REM sleep consolidation pass over Hot RAM."""
+        return self._consolidator.consolidate(self._current_turn)
 
     async def _process_updates(self, payload: UnifiedMemoryPayload) -> None:
         """Process extracted memory updates: log, suppress overrides, upsert."""
@@ -137,6 +155,7 @@ class NeuromorphicMemory:
                 consolidation_index=0,
                 created_at_turn=self._current_turn,
                 last_reinforced_turn=self._current_turn,
+                related_entities=list(update.related_entities),
             )
             self._hot.upsert(record, embedding)
 
@@ -197,4 +216,5 @@ class NeuromorphicMemory:
     def close(self) -> None:
         """Close storage resources and connections."""
         self._cold.close()
+
 

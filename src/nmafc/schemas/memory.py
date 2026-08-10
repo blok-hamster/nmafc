@@ -19,7 +19,7 @@ class MemoryStateUpdate(BaseModel):
     entity_name: str = Field(
         ...,
         min_length=1,
-        description="Unique identifier of the entity being updated (e.g. 'user_allergy', 'medication_morning')",
+        description="Unique identifier of the entity being updated (e.g. 'user_allergy', 'blood_pressure_medication')",
     )
     fact_content: str = Field(
         ...,
@@ -33,6 +33,10 @@ class MemoryStateUpdate(BaseModel):
     overrides_entity: Optional[str] = Field(
         default=None,
         description="Entity name of an existing memory this update contradicts/replaces.",
+    )
+    related_entities: list[str] = Field(
+        default_factory=list,
+        description="List of related entity names linked to this fact for graph spreading activation.",
     )
 
 
@@ -57,6 +61,7 @@ class MemoryRecord(BaseModel):
     created_at_turn: int = Field(default=0, ge=0)
     last_reinforced_turn: int = Field(default=0, ge=0)
     is_active: bool = Field(default=True)
+    related_entities: list[str] = Field(default_factory=list)
 
 
 class SearchResult(BaseModel):
@@ -64,6 +69,8 @@ class SearchResult(BaseModel):
 
     record: MemoryRecord
     score: float = Field(ge=0.0, le=1.0)
+    hops: int = Field(default=0, ge=0, description="Graph traversal hop distance (0 = direct vector hit)")
+
 
 
 class DecayConfig(BaseModel):
@@ -78,6 +85,8 @@ class DecayConfig(BaseModel):
     theta: float = Field(default=0.75, ge=0.0, le=1.0, description="Retrieval similarity threshold")
     top_k: int = Field(default=10, gt=0)
     fallback_keyword_limit: int = Field(default=20, gt=0)
+    max_hops: int = Field(default=2, ge=0, description="Max graph traversal depth for Spreading Activation")
+    auto_consolidate_turns: int = Field(default=5, ge=0, description="Interval in turns for automatic REM consolidation")
 
     def get_lambda_base(self, memory_type: MemoryType) -> float:
         match memory_type:

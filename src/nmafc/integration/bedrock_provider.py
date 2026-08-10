@@ -40,6 +40,11 @@ BEDROCK_TOOL_SCHEMA: dict[str, Any] = {
                                     "type": "string",
                                     "description": "Entity name this contradicts/replaces.",
                                 },
+                                "related_entities": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "Entity names linked to this fact for graph spreading activation (e.g. ['spouse_james', 'brother_david']).",
+                                },
                             },
                             "required": ["entity_name", "fact_content", "memory_type"],
                         },
