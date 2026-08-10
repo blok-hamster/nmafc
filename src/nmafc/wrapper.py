@@ -193,3 +193,8 @@ class NeuromorphicMemory:
             "total_events": self._cold.count_total(),
             "active_events": self._cold.count_active(),
         }
+
+    def close(self) -> None:
+        """Close storage resources and connections."""
+        self._cold.close()
+

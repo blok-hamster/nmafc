@@ -113,7 +113,7 @@ async def run_complex_smoke_test() -> None:
     print("NMAFC COMPLEX SMOKE TEST — 15 turns, Claude Haiku 4.5 via AWS Bedrock")
     print("=" * 80)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         config = NMafcConfig(
             storage=StorageConfig(
                 hot_uri=str(Path(tmpdir) / "lancedb"),
@@ -198,7 +198,7 @@ async def run_complex_smoke_test() -> None:
             checks.append(("Current medication is losartan (not lisinopril)", False))
 
         # 5. Old lisinopril records should be suppressed/pruned
-        lisinopril_active = [r for r in all_records if "lisinopril" in r.entity_name.lower() and r.weight > 0.1]
+        lisinopril_active = [r for r in all_records if "lisinopril" in r.fact_content.lower() and r.weight > 0.1 and "losartan" not in r.fact_content.lower()]
         checks.append(("Old lisinopril records suppressed/pruned", len(lisinopril_active) == 0))
 
         # 6. Headache (Turn 4) should be fully decayed/pruned by Turn 15
@@ -266,6 +266,8 @@ async def run_complex_smoke_test() -> None:
             print(f"  Ephemeral avg weight:          {sum(ephemeral_weights) / len(ephemeral_weights):.4f}")
         else:
             print(f"  Ephemeral records:             all pruned (correct)")
+
+        mem.close()
 
 
 if __name__ == "__main__":

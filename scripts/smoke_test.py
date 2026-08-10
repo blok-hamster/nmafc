@@ -52,7 +52,7 @@ async def run_smoke_test() -> None:
     print("NMAFC LIVE SMOKE TEST — Claude Haiku 4.5 via AWS Bedrock")
     print("=" * 70)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         config = NMafcConfig(
             storage=StorageConfig(
                 hot_uri=str(Path(tmpdir) / "lancedb"),
@@ -147,6 +147,9 @@ async def run_smoke_test() -> None:
 
         all_passed = all(p for _, p in checks)
         print(f"\n  {'ALL CHECKS PASSED' if all_passed else 'SOME CHECKS FAILED'}")
+
+        mem.close()
+
 
 
 if __name__ == "__main__":
