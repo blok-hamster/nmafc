@@ -105,7 +105,12 @@ class FrameworkRunners:
 
             prompt = f"Retrieved Neuromorphic Memory Context:\n{memory_context}\n\nUser Question: {case.query}"
             messages = [{"role": "user", "content": prompt}]
-            response, _ = await self.llm.chat_with_extraction(messages, "Answer the user question accurately using the retrieved neuromorphic memory context. Be direct, factual, and concise.")
+            sys_prompt = (
+                "Answer the user question accurately using ONLY the retrieved neuromorphic memory context.\n"
+                "CRITICAL: If the memory context is empty or does not contain information answering the question, "
+                "state explicitly: 'The user has not mentioned this.' Do NOT make up or guess any details."
+            )
+            response, _ = await self.llm.chat_with_extraction(messages, sys_prompt)
 
             latency = time.perf_counter() - start
             tokens = (len(memory_context) // 4) + 20

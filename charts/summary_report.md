@@ -2,8 +2,8 @@
 
 | Framework | Mean Accuracy Score | Context Collision Rate | Avg Latency (s) | Avg Tokens/Turn | Total Cost ($ USD) |
 |---|---|---|---|---|---|
-| **MemGPT / Letta** | 75.7% | 4.0% | 5.89s | 220 | $0.01324 |
-| **Naive RAG** | 77.1% | 2.7% | 2.34s | 69 | $0.00156 |
-| **Neuromorphic (nmafc)** | 77.6% | 0.0% | 9.24s | 54 | $0.00033 |
-| **Vanilla LLM** | 71.2% | 5.3% | 2.06s | 95 | $0.00144 |
-| **Zep (Graph)** | 81.5% | 4.0% | 3.33s | 71 | $0.00215 |
+| **MemGPT / Letta** | 88.5% | 1.3% | 6.45s | 220 | $0.01324 |
+| **Naive RAG** | 92.8% | 4.0% | 2.54s | 69 | $0.00156 |
+| **Neuromorphic (nmafc)** | 96.1% | 0.0% | 10.26s | 54 | $0.00033 |
+| **Vanilla LLM** | 88.3% | 2.7% | 2.08s | 95 | $0.00144 |
+| **Zep (Graph)** | 90.4% | 4.0% | 4.91s | 71 | $0.00215 |

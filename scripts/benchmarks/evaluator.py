@@ -35,7 +35,12 @@ def evaluate_result(result: RunResult) -> ScoredResult:
 
     # Special false premise handling
     if "never mentioned" in gt_lower or "no bicycle" in gt_lower or "didn't mention" in gt_lower:
-        if "don't know" in resp_lower or "didn't mention" in resp_lower or "not mentioned" in resp_lower or "no mention" in resp_lower:
+        rejection_phrases = [
+            "don't know", "didn't mention", "not mentioned", "no mention",
+            "never mentioned", "no information", "do not specify", "does not specify",
+            "no record", "not provided", "haven't mentioned", "not state", "no bicycle"
+        ]
+        if any(p in resp_lower for p in rejection_phrases):
             score = 1.0
         else:
             score = 0.2
