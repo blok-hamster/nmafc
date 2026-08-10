@@ -31,9 +31,15 @@ class MemoryConsolidator:
         # 1. Elevate highly consolidated ActiveContext (k >= 10) to CoreAnchor
         for rec in records:
             if rec.memory_type == MemoryType.ACTIVE_CONTEXT and rec.consolidation_index >= 10:
-                elevated = rec.model_copy(update={"memory_type": MemoryType.CORE_ANCHOR, "weight": 1.0})
-                self._hot.update_weight(elevated.id, 1.0)
-                consolidated_count += 1
+                results = self._hot._table.search().where(f"id = '{rec.id}'").limit(1).to_list()
+                if results:
+                    row = results[0]
+                    row["memory_type"] = MemoryType.CORE_ANCHOR.value
+                    row["weight"] = 1.0
+                    row.pop("_distance", None)
+                    self._hot.delete(rec.id)
+                    self._hot._table.add([row])
+                    consolidated_count += 1
 
         # 2. Clean up dead relation pointers
         active_entities = {r.entity_name.lower() for r in self._hot.get_all()}
@@ -42,7 +48,6 @@ class MemoryConsolidator:
                 continue
             cleaned_relations = [rel for rel in rec.related_entities if rel.lower() in active_entities]
             if len(cleaned_relations) != len(rec.related_entities):
-                updated = rec.model_copy(update={"related_entities": cleaned_relations})
                 results = self._hot._table.search().where(f"id = '{rec.id}'").limit(1).to_list()
                 if results:
                     row = results[0]
