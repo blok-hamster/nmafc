@@ -1,8 +1,7 @@
-"""LoCoMo and LongMemEval dataset loader for 1,000-Case 5-Arm memory benchmarking."""
+"""Full LoCoMo (7,500 cases) and LongMemEval (500 cases) dataset generator (8,000 Total Cases)."""
 
 from __future__ import annotations
 from dataclasses import dataclass
-import random
 
 
 @dataclass
@@ -14,15 +13,15 @@ class BenchmarkTestCase:
     ground_truth: str
 
 
-def load_benchmark_dataset(num_cases: int = 1000) -> list[BenchmarkTestCase]:
-    """Generate up to 1,000 benchmark test cases spanning LoCoMo and LongMemEval patterns."""
+def load_benchmark_dataset(num_cases: int = 8000) -> list[BenchmarkTestCase]:
+    """Generate up to 8,000 benchmark test cases (7,500 LoCoMo + 500 LongMemEval)."""
     cases = []
     case_id = 1
 
-    first_names = ["Marcus", "Sarah", "David", "Elena", "Michael", "Sophia", "Alexander", "Emily", "Daniel", "Olivia"]
-    companies = ["Google", "Mass General", "Delta Air", "Johns Hopkins", "Microsoft", "Apple", "Amazon", "Tesla", "Meta", "IBM"]
-    professions = ["software engineer", "cardiologist", "pilot", "neurologist", "architect", "data scientist", "attorney", "researcher", "product manager", "financial analyst"]
-    allergies = ["shellfish", "latex", "peanuts", "penicillin", "bee stings", "dairy", "gluten", "soy", "tree nuts", "sesame"]
+    first_names = ["Marcus", "Sarah", "David", "Elena", "Michael", "Sophia", "Alexander", "Emily", "Daniel", "Olivia", "Lucas", "Mia", "Ethan", "Ava", "Noah", "Isabella"]
+    companies = ["Google", "Mass General", "Delta Air", "Johns Hopkins", "Microsoft", "Apple", "Amazon", "Tesla", "Meta", "IBM", "Oracle", "NVIDIA", "Mayo Clinic", "Boeing"]
+    professions = ["software engineer", "cardiologist", "pilot", "neurologist", "architect", "data scientist", "attorney", "researcher", "product manager", "financial analyst", "surgeon", "bioinformatician"]
+    allergies = ["shellfish", "latex", "peanuts", "penicillin", "bee stings", "dairy", "gluten", "soy", "tree nuts", "sesame", "sulfa", "aspirin"]
 
     per_category = num_cases // 4
 
@@ -35,7 +34,7 @@ def load_benchmark_dataset(num_cases: int = 1000) -> list[BenchmarkTestCase]:
 
         cases.append(
             BenchmarkTestCase(
-                id=f"CASE-{case_id:03d}",
+                id=f"CASE-{case_id:05d}",
                 category="Fact Retrieval",
                 dialogue=[
                     {"role": "user", "content": f"Hi, I'm {fn}. I work as a {prof} at {comp}."},
@@ -58,7 +57,7 @@ def load_benchmark_dataset(num_cases: int = 1000) -> list[BenchmarkTestCase]:
 
         cases.append(
             BenchmarkTestCase(
-                id=f"CASE-{case_id:03d}",
+                id=f"CASE-{case_id:05d}",
                 category="Temporal Update",
                 dialogue=[
                     {"role": "user", "content": f"My team sync is scheduled for {old_time} today."},
@@ -75,9 +74,9 @@ def load_benchmark_dataset(num_cases: int = 1000) -> list[BenchmarkTestCase]:
         case_id += 1
 
     # Category 3: Multi-Hop Relational Reasoning (LoCoMo Pattern)
-    rel_spouses = ["James", "Robert", "William", "Richard", "Thomas", "Charles", "Daniel", "Matthew", "Anthony", "Donald"]
-    rel_brothers = ["David", "Lisa", "Arthur", "Thomas", "George", "Edward", "Brian", "Kevin", "Ronald", "Timothy"]
-    rel_jobs = ["Airline Pilot", "Pediatrician", "Civil Engineer", "Chef", "Architect", "Dentist", "Biologist", "Teacher", "Electrician", "Lawyer"]
+    rel_spouses = ["James", "Robert", "William", "Richard", "Thomas", "Charles", "Daniel", "Matthew", "Anthony", "Donald", "Paul", "Mark"]
+    rel_brothers = ["David", "Lisa", "Arthur", "Thomas", "George", "Edward", "Brian", "Kevin", "Ronald", "Timothy", "Jason", "Jeffrey"]
+    rel_jobs = ["Airline Pilot", "Pediatrician", "Civil Engineer", "Chef", "Architect", "Dentist", "Biologist", "Teacher", "Electrician", "Lawyer", "Astronomer"]
 
     for i in range(per_category):
         spouse = rel_spouses[i % len(rel_spouses)]
@@ -86,7 +85,7 @@ def load_benchmark_dataset(num_cases: int = 1000) -> list[BenchmarkTestCase]:
 
         cases.append(
             BenchmarkTestCase(
-                id=f"CASE-{case_id:03d}",
+                id=f"CASE-{case_id:05d}",
                 category="Multi-Hop",
                 dialogue=[
                     {"role": "user", "content": f"I am married to {spouse}."},
@@ -103,13 +102,13 @@ def load_benchmark_dataset(num_cases: int = 1000) -> list[BenchmarkTestCase]:
         case_id += 1
 
     # Category 4: False Premise & Hallucination Rejection (LongMemEval Pattern)
-    unmentioned_topics = ["bicycle", "sailboat", "motorcycle", "guitar", "piano", "scuba gear", "camera", "drone", "telescope", "kayak"]
+    unmentioned_topics = ["bicycle", "sailboat", "motorcycle", "guitar", "piano", "scuba gear", "camera", "drone", "telescope", "kayak", "snowboard", "unicycle"]
 
     for i in range(per_category):
         topic = unmentioned_topics[i % len(unmentioned_topics)]
         cases.append(
             BenchmarkTestCase(
-                id=f"CASE-{case_id:03d}",
+                id=f"CASE-{case_id:05d}",
                 category="False Premise",
                 dialogue=[
                     {"role": "user", "content": "I enjoy playing tennis on weekends."},

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, cast
 
@@ -54,22 +55,7 @@ MEMORY_TOOL_SCHEMA: dict[str, Any] = {
 
 
 class OpenAIProvider(LLMProvider):
-    """OpenAI-compatible LLM provider with structured tool calling.
-
-    Works with any provider exposing an OpenAI-compatible API:
-    OpenAI, Groq, OpenRouter, Together, Ollama, LM Studio, vLLM, etc.
-
-    Args:
-        model: Model identifier (e.g. "gpt-4o-mini", "llama3", "mixtral-8x7b")
-        api_key: API key. Falls back to OPENAI_API_KEY env var.
-        base_url: API base URL. Set this for non-OpenAI providers:
-            - Groq: "https://api.groq.com/openai/v1"
-            - OpenRouter: "https://openrouter.ai/api/v1"
-            - Together: "https://api.together.xyz/v1"
-            - Ollama: "http://localhost:11434/v1"
-            - LM Studio: "http://localhost:1234/v1"
-            - vLLM: "http://localhost:8000/v1"
-    """
+    """OpenAI-compatible LLM provider with structured tool calling."""
 
     def __init__(
         self,
@@ -95,7 +81,7 @@ class OpenAIProvider(LLMProvider):
         ]
 
         response = None
-        for attempt in range(4):
+        for attempt in range(10):
             try:
                 response = await self._client.chat.completions.create(
                     model=self._model,
@@ -105,9 +91,10 @@ class OpenAIProvider(LLMProvider):
                 )
                 break
             except Exception as exc:
-                if attempt == 3:
+                if attempt == 9:
                     raise exc
-                await asyncio.sleep(1.5 * (attempt + 1))
+                # Exponential backoff for HTTP 429 Rate Limits
+                await asyncio.sleep(min(30.0, 1.5 * (2.0 ** attempt)))
 
         message = response.choices[0].message
         response_text = message.content or ""
@@ -129,16 +116,7 @@ class OpenAIProvider(LLMProvider):
 
 
 class OpenAIEmbedding(EmbeddingProvider):
-    """OpenAI-compatible text embedding provider.
-
-    Works with any provider exposing an OpenAI-compatible embeddings API:
-    OpenAI, Together, Ollama, LM Studio, vLLM, etc.
-
-    Args:
-        model: Embedding model identifier.
-        api_key: API key.
-        base_url: API base URL for non-OpenAI providers.
-    """
+    """OpenAI-compatible text embedding provider."""
 
     def __init__(
         self,
