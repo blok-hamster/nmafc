@@ -1,6 +1,7 @@
-"""Main entry point to execute the 100-case 5-Arm memory benchmark suite."""
+"""Main entry point to execute the 1,000-case 5-Arm memory benchmark suite."""
 
 from __future__ import annotations
+import argparse
 import asyncio
 import os
 import sys
@@ -19,23 +20,27 @@ from scripts.benchmarks.visualize import generate_visualizations
 
 
 async def main() -> None:
+    parser = argparse.ArgumentParser(description="Run 5-Arm Memory Benchmark Suite")
+    parser.add_argument("--cases", type=int, default=1000, help="Total test cases to execute (default: 1000)")
+    args = parser.parse_args()
+
     endpoint = "https://support-6339-resource.openai.azure.com/openai/v1"
     key = "CpWxYfzO4DnX3GaCBPz3QhsobsPrGpTtfPSXa90x4sl3pU8OTpWCJQQJ99CHACfhMk5XJ3w3AAAAACOGXXQW"
     model = "DeepSeek-V4-Pro"
 
     print("=" * 80, flush=True)
-    print("🚀 EXECUTING 100-CASE LoCoMo & LongMemEval BENCHMARK SUITE", flush=True)
+    print(f"🚀 EXECUTING {args.cases}-CASE LoCoMo & LongMemEval BENCHMARK SUITE", flush=True)
     print(f"   Model: {model} via Azure OpenAI Endpoint", flush=True)
     print("=" * 80, flush=True)
 
-    dataset = load_benchmark_dataset()
+    dataset = load_benchmark_dataset(num_cases=args.cases)
     print(f"Loaded {len(dataset)} benchmark test cases.", flush=True)
 
     runners = FrameworkRunners(endpoint=endpoint, api_key=key, model=model)
     scored_results = []
 
     for idx, case in enumerate(dataset, start=1):
-        print(f"\n[{idx}/100] Running {case.id} ({case.category}): '{case.query}'", flush=True)
+        print(f"\n[{idx}/{len(dataset)}] Running {case.id} ({case.category}): '{case.query}'", flush=True)
 
         res1, res2, res3, res4, res5 = await asyncio.gather(
             runners.run_vanilla_llm(case),

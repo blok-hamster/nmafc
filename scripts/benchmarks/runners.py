@@ -35,11 +35,20 @@ class FrameworkRunners:
         self.model = model
         self.llm = OpenAIProvider(model=model, api_key=api_key, base_url=endpoint)
 
+    async def _with_retry(self, fn, *args, retries: int = 3):
+        for attempt in range(retries):
+            try:
+                return await fn(*args)
+            except Exception as e:
+                if attempt == retries - 1:
+                    raise e
+                await asyncio.sleep(2.0 * (attempt + 1))
+
     async def run_vanilla_llm(self, case) -> RunResult:
         """Arm 1: Vanilla LLM with rolling context window (last 5 turns)."""
         start = time.perf_counter()
         messages = case.dialogue[-5:] + [{"role": "user", "content": case.query}]
-        response, _ = await self.llm.chat_with_extraction(messages, "Answer the user question accurately.")
+        response, _ = await self._with_retry(self.llm.chat_with_extraction, messages, "Answer the user question accurately.")
         latency = time.perf_counter() - start
         tokens = len(str(messages)) // 4
         return RunResult("Vanilla LLM", case.id, case.category, case.query, case.ground_truth, response, latency, tokens, (tokens / 1000) * 0.0002)
@@ -56,15 +65,14 @@ class FrameworkRunners:
         return RunResult("Naive RAG", case.id, case.category, case.query, case.ground_truth, response, latency, tokens, (tokens / 1000) * 0.0003)
 
     async def run_memgpt_baseline(self, case) -> RunResult:
-        """Arm 3: MemGPT / Letta Agent Baseline (Multi-step Tool Loop)."""
+        """Arm 3: MemGPT / Letta Agent Baseline."""
         start = time.perf_counter()
-        # Simulates 2-turn inner agent reasoning loop latency and token overhead
         context_str = "\n".join([f"{d['role']}: {d['content']}" for d in case.dialogue])
         prompt = f"[MemGPT Core Memory Buffer]\n{context_str}\n\nQuery: {case.query}"
         messages = [{"role": "user", "content": prompt}]
-        response, _ = await self.llm.chat_with_extraction(messages, "Execute agent memory loop and answer.")
-        latency = (time.perf_counter() - start) * 2.1  # Overhead multiplier
-        tokens = (len(prompt) // 4) * 3               # Tool loop token overhead
+        response, _ = await self._with_retry(self.llm.chat_with_extraction, messages, "Execute agent memory loop and answer.")
+        latency = time.perf_counter() - start
+        tokens = len(prompt) // 4
         return RunResult("MemGPT / Letta", case.id, case.category, case.query, case.ground_truth, response, latency, tokens, (tokens / 1000) * 0.0008)
 
     async def run_zep_baseline(self, case) -> RunResult:
@@ -73,10 +81,11 @@ class FrameworkRunners:
         context_str = "\n".join([f"{d['role']}: {d['content']}" for d in case.dialogue])
         prompt = f"[Zep Graph Triples]\n{context_str}\n\nQuery: {case.query}"
         messages = [{"role": "user", "content": prompt}]
-        response, _ = await self.llm.chat_with_extraction(messages, "Answer using knowledge graph relationships.")
-        latency = (time.perf_counter() - start) * 1.4
+        response, _ = await self._with_retry(self.llm.chat_with_extraction, messages, "Answer using knowledge graph relationships.")
+        latency = time.perf_counter() - start
         tokens = len(prompt) // 4
         return RunResult("Zep (Graph)", case.id, case.category, case.query, case.ground_truth, response, latency, tokens, (tokens / 1000) * 0.0004)
+
 
     async def run_neuromorphic_memory(self, case) -> RunResult:
         """Arm 5: Neuromorphic Memory (nmafc V2 - Spreading Activation + Decay)."""

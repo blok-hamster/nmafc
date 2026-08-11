@@ -82,7 +82,7 @@ class OpenAIProvider(LLMProvider):
         except ImportError as e:
             raise ImportError("Install openai: pip install nmafc[llm]") from e
 
-        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=90.0)
         self._model = model
 
     async def chat_with_extraction(
@@ -94,12 +94,20 @@ class OpenAIProvider(LLMProvider):
             {"role": "system", "content": system_prompt}, *messages
         ]
 
-        response = await self._client.chat.completions.create(
-            model=self._model,
-            messages=cast(Any, full_messages),
-            tools=cast(Any, [MEMORY_TOOL_SCHEMA]),
-            tool_choice="auto",
-        )
+        response = None
+        for attempt in range(4):
+            try:
+                response = await self._client.chat.completions.create(
+                    model=self._model,
+                    messages=cast(Any, full_messages),
+                    tools=cast(Any, [MEMORY_TOOL_SCHEMA]),
+                    tool_choice="auto",
+                )
+                break
+            except Exception as exc:
+                if attempt == 3:
+                    raise exc
+                await asyncio.sleep(1.5 * (attempt + 1))
 
         message = response.choices[0].message
         response_text = message.content or ""
