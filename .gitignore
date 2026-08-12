@@ -12,3 +12,15 @@ wheels/
 
 # Secrets
 .env
+
+# Data / storage (generated at runtime)
+data/
+*.db
+*.lancedb/
+
+# Benchmark results and checkpoints
+scripts/benchmarks/results/
+checkpoint_*.json
+
+# OS files
+.DS_Store
