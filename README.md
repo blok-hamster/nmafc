@@ -79,12 +79,12 @@ Every 5 turns (configurable), a consolidation pass runs:
 
 ### 7. Dual-Track Storage
 
-| Layer | Technology | Purpose | Mutability |
-|-------|-----------|---------|------------|
-| **Hot RAM** | LanceDB (embedded vector DB) | Fast retrieval, vector search, weight updates | Mutable (decay, reinforce, delete) |
-| **Cold ROM** | SQLite (WAL mode, FTS5) | Complete event log, keyword fallback, rollback source | Append-only |
+| Layer | Technology | Remote Option | Purpose | Mutability |
+|-------|-----------|---------------|---------|------------|
+| **Hot RAM** | LanceDB (embedded vector DB) | S3-compatible storage | Fast retrieval, vector search, weight updates | Mutable (decay, reinforce, delete) |
+| **Cold ROM** | SQLite (WAL mode, FTS5) | PostgreSQL (tsvector + GIN) | Complete event log, keyword fallback, rollback source | Append-only |
 
-Cold ROM enables full state reconstruction at any point in time via event replay.
+Both layers support `agent_id` + `conversation_id` scoping for multi-tenant and multi-conversation isolation. Cold ROM enables full state reconstruction at any point in time via event replay.
 
 ## Architecture
 
@@ -143,10 +143,13 @@ pip install nmafc[llm]
 # With AWS Bedrock support
 pip install nmafc[aws]
 
+# With PostgreSQL remote storage
+pip install nmafc[postgres]
+
 # With benchmark suite
 pip install nmafc[bench]
 
-# Everything
+# Everything (LLM + AWS + Postgres + Benchmarks)
 pip install nmafc[all]
 
 # Development (from source)
@@ -294,8 +297,10 @@ provider_model = "openai/text-embedding-3-small"
 
 | Variable | Overrides | Description |
 |----------|-----------|-------------|
-| `NMAFC_HOT_URI` | `storage.hot_uri` | Hot RAM storage path |
-| `NMAFC_COLD_URI` | `storage.cold_uri` | Cold ROM storage path |
+| `NMAFC_HOT_URI` | `storage.hot_uri` | Hot RAM storage path (local or `s3://`) |
+| `NMAFC_COLD_URI` | `storage.cold_uri` | Cold ROM path (local `.db` or `postgresql://`) |
+| `NMAFC_AGENT_ID` | `storage.agent_id` | Agent/tenant namespace for isolation |
+| `NMAFC_CONVERSATION_ID` | `storage.conversation_id` | Conversation thread isolation |
 | `NMAFC_LLM_PROVIDER_MODEL` | `llm.provider_model` | Default LLM provider |
 | `NMAFC_EMBEDDING_PROVIDER_MODEL` | `embedding.provider_model` | Default embedding provider |
 
@@ -340,6 +345,125 @@ cp .env.example .env
 ```
 
 The framework loads `.env` automatically via `python-dotenv`. See [.env.example](.env.example) for all supported variables.
+
+## Remote Storage
+
+By default NMAFC stores everything locally (LanceDB directory + SQLite file). For production deployments where multiple instances need shared memory, both layers support remote backends:
+
+### Hot RAM → S3
+
+LanceDB natively supports S3 URIs. No code changes — just set the URI:
+
+```bash
+NMAFC_HOT_URI=s3://your-bucket/nmafc/hot_lancedb
+```
+
+Requires AWS credentials (`AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`) in environment. Works with any S3-compatible store (AWS S3, MinIO, R2).
+
+**Self-hosted (MinIO):**
+
+```bash
+NMAFC_HOT_URI=s3://nmafc-bucket/hot_lancedb
+AWS_ENDPOINT_URL=http://localhost:9000
+AWS_ACCESS_KEY_ID=minioadmin
+AWS_SECRET_ACCESS_KEY=minioadmin
+AWS_ALLOW_HTTP=true
+```
+
+`AWS_ENDPOINT_URL` redirects all S3 calls to your MinIO instance. `AWS_ALLOW_HTTP=true` is needed if not behind TLS. Same pattern works for Ceph, Wasabi, or Cloudflare R2.
+
+### Cold ROM → PostgreSQL / CockroachDB
+
+Replace SQLite with a managed PostgreSQL-compatible database for multi-writer access and remote persistence:
+
+```bash
+# Managed PostgreSQL (Supabase, Neon, RDS, AlloyDB)
+NMAFC_COLD_URI=postgresql://user:pass@host:5432/nmafc
+
+# CockroachDB (distributed, self-hosted or Cockroach Cloud)
+NMAFC_COLD_URI=postgresql://root@cockroach-host:26257/nmafc?sslmode=verify-full
+```
+
+Uses `tsvector` + GIN index for full-text search (replaces SQLite FTS5). Both PostgreSQL and CockroachDB (v23.1+) fully support all required features — `TSVECTOR`, `to_tsvector()`, `plainto_tsquery()`, `@@` operator, `ts_rank()`, GIN indexes, and `GENERATED ALWAYS AS ... STORED` computed columns.
+
+Install the optional dependency:
+
+```bash
+pip install nmafc[postgres]
+```
+
+### Deployment Examples
+
+| Environment | `NMAFC_HOT_URI` | `NMAFC_COLD_URI` |
+|-------------|-----------------|------------------|
+| Local dev | `./data/lancedb` | `./data/cold.db` |
+| Single server | `/var/nmafc/hot` | `/var/nmafc/cold.db` |
+| Self-hosted | `s3://bucket/hot` (MinIO) | `postgresql://root@cockroach:26257/nmafc` |
+| Managed cloud | `s3://bucket/nmafc/hot` (AWS) | `postgresql://user:pass@neon.tech/nmafc` |
+
+## Multi-Tenancy & Conversation Isolation
+
+Enterprise deployments need two levels of isolation:
+
+1. **Agent/Tenant isolation** — separate agents or organizations sharing the same infrastructure cannot see each other's memories
+2. **Conversation isolation** — within a single agent, separate conversation threads don't leak context
+
+NMAFC handles both via `agent_id` and `conversation_id` scoping. Every read and write in Hot RAM and Cold ROM is filtered by both IDs.
+
+### Configuration
+
+**Via environment variables:**
+
+```bash
+NMAFC_AGENT_ID=customer-support-bot-01
+NMAFC_CONVERSATION_ID=conv_abc123
+```
+
+**Via code (dynamic per-request):**
+
+```python
+from nmafc.wrapper import NeuromorphicMemory
+from nmafc.storage.config import NMafcConfig, StorageConfig
+
+config = NMafcConfig(
+    storage=StorageConfig(
+        agent_id="customer-support-bot-01",
+        conversation_id="conv_abc123",
+        hot_uri="s3://bucket/nmafc/hot",
+        cold_uri="postgresql://host/nmafc",
+    )
+)
+memory = NeuromorphicMemory.from_config(config=config)
+```
+
+### How It Works
+
+| Layer | Isolation Mechanism |
+|-------|---------------------|
+| Hot RAM (LanceDB) | `agent_id` and `conversation_id` columns added to every record. All vector searches, entity lookups, and listings include `WHERE agent_id = ? AND conversation_id = ?` |
+| Cold ROM (SQLite) | Same columns + compound index `(agent_id, conversation_id)`. All reads scoped. FTS results joined with scope filter |
+| Cold ROM (PostgreSQL) | Same columns + composite index. Row-level filtering on all queries |
+
+### Enterprise Pattern
+
+```python
+# API gateway generates IDs per request
+agent_id = request.headers["X-Agent-ID"]       # "support-bot-prod"
+conversation_id = request.headers["X-Conv-ID"]  # "conv_7f3a2b"
+
+config = NMafcConfig(
+    storage=StorageConfig(
+        agent_id=agent_id,
+        conversation_id=conversation_id,
+        hot_uri="s3://company-bucket/nmafc/hot",
+        cold_uri="postgresql://neon.tech:5432/nmafc",
+    )
+)
+memory = NeuromorphicMemory.from_config(config=config)
+response = await memory.process_turn(user_msg=body["message"])
+```
+
+Multiple workers (Lambda, ECS, K8s pods) all read/write the same remote storage — memories are shared within a scope and completely invisible across scopes.
 
 ## Benchmark Suite
 
@@ -467,8 +591,10 @@ nmafc/
 │   │   └── fastembed_provider.py  # ONNX CPU embeddings
 │   └── storage/
 │       ├── config.py              # NMafcConfig + TOML parsing
-│       ├── hot.py                 # HotStorage (LanceDB)
-│       └── cold.py                # ColdStorage (SQLite + FTS5)
+│       ├── hot.py                 # HotStorage (LanceDB, supports S3)
+│       ├── cold_base.py           # Abstract ColdStorageBase interface
+│       ├── cold.py                # ColdStorage (SQLite + FTS5)
+│       └── cold_pg.py             # PostgresColdStorage (PostgreSQL + tsvector)
 ├── configs/
 │   └── default.toml               # Default configuration
 ├── scripts/benchmarks/             # Academic benchmark suite
