@@ -4,12 +4,12 @@ from typing import Callable
 
 from nmafc.schemas.memory import DecayConfig, MemoryRecord, MemoryStateUpdate, MemoryType
 from nmafc.engine.decay import decay_record
-from nmafc.storage.cold import ColdStorage
+from nmafc.storage.cold_base import ColdStorageBase
 from nmafc.storage.hot import HotStorage
 
 
 def rebuild_hot_from_cold(
-    cold: ColdStorage,
+    cold: ColdStorageBase,
     hot: HotStorage,
     embed_fn: Callable[[str], list[float]],
     config: DecayConfig,
@@ -53,7 +53,7 @@ def rebuild_hot_from_cold(
 
 
 def invalidate_event(
-    cold: ColdStorage,
+    cold: ColdStorageBase,
     hot: HotStorage,
     event_id: int,
     entity_name: str,

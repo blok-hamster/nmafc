@@ -14,6 +14,8 @@ TABLE_NAME = "memory_vectors"
 SCHEMA = pa.schema([
     pa.field("vector", pa.list_(pa.float32(), -1)),
     pa.field("id", pa.string()),
+    pa.field("agent_id", pa.string()),
+    pa.field("conversation_id", pa.string()),
     pa.field("entity_name", pa.string()),
     pa.field("fact_content", pa.string()),
     pa.field("memory_type", pa.string()),
@@ -34,7 +36,10 @@ class HotStorage:
 
     def __init__(self, config: StorageConfig) -> None:
         self._config = config
-        Path(config.hot_uri).mkdir(parents=True, exist_ok=True)
+        self._agent_id = config.agent_id
+        self._conversation_id = config.conversation_id
+        if not config.is_cloud:
+            Path(config.hot_uri).mkdir(parents=True, exist_ok=True)
         self._db = lancedb.connect(config.hot_uri)
         self._ensure_table()
 
@@ -43,6 +48,8 @@ class HotStorage:
             schema = pa.schema([
                 pa.field("vector", pa.list_(pa.float32(), self._config.embedding_dim)),
                 pa.field("id", pa.string()),
+                pa.field("agent_id", pa.string()),
+                pa.field("conversation_id", pa.string()),
                 pa.field("entity_name", pa.string()),
                 pa.field("fact_content", pa.string()),
                 pa.field("memory_type", pa.string()),
@@ -55,6 +62,11 @@ class HotStorage:
             self._db.create_table(TABLE_NAME, schema=schema)
         self._table = self._db.open_table(TABLE_NAME)
 
+    @property
+    def _scope_filter(self) -> str:
+        """WHERE clause that scopes all queries to this agent + conversation."""
+        return f"agent_id = '{self._agent_id}' AND conversation_id = '{self._conversation_id}'"
+
     def upsert(self, record: MemoryRecord, embedding: list[float]) -> None:
         existing = self._table.search().where(f"id = '{record.id}'").limit(1).to_list()
         if existing:
@@ -63,6 +75,8 @@ class HotStorage:
         row = {
             "vector": embedding,
             "id": record.id,
+            "agent_id": self._agent_id,
+            "conversation_id": self._conversation_id,
             "entity_name": record.entity_name,
             "fact_content": record.fact_content,
             "memory_type": record.memory_type.value,
@@ -75,7 +89,12 @@ class HotStorage:
         self._table.add([row])
 
     def search(self, query_embedding: list[float], top_k: int = 10) -> list[SearchResult]:
-        results = self._table.search(query_embedding).limit(top_k).to_list()
+        results = (
+            self._table.search(query_embedding)
+            .where(self._scope_filter)
+            .limit(top_k)
+            .to_list()
+        )
         search_results = []
         for row in results:
             distance = row.get("_distance", 0.0)
@@ -87,7 +106,7 @@ class HotStorage:
     def get_by_entity(self, entity_name: str) -> list[MemoryRecord]:
         results = (
             self._table.search()
-            .where(f"entity_name = '{entity_name}'")
+            .where(f"{self._scope_filter} AND entity_name = '{entity_name}'")
             .limit(100)
             .to_list()
         )
@@ -99,7 +118,7 @@ class HotStorage:
         quoted = ", ".join(f"'{name}'" for name in set(entity_names))
         results = (
             self._table.search()
-            .where(f"entity_name IN ({quoted})")
+            .where(f"{self._scope_filter} AND entity_name IN ({quoted})")
             .limit(500)
             .to_list()
         )
@@ -133,22 +152,22 @@ class HotStorage:
     def get_all_mutable(self) -> list[MemoryRecord]:
         results = (
             self._table.search()
-            .where(f"memory_type != '{MemoryType.CORE_ANCHOR.value}'")
+            .where(f"{self._scope_filter} AND memory_type != '{MemoryType.CORE_ANCHOR.value}'")
             .limit(10000)
             .to_list()
         )
         return [self._row_to_record(r) for r in results]
 
     def get_all(self) -> list[MemoryRecord]:
-        results = self._table.search().limit(10000).to_list()
+        results = self._table.search().where(self._scope_filter).limit(10000).to_list()
         return [self._row_to_record(r) for r in results]
 
     def count(self) -> int:
         return self._table.count_rows()
 
     def clear(self) -> None:
-        self._db.drop_table(TABLE_NAME)
-        self._ensure_table()
+        """Remove all records scoped to this agent + conversation."""
+        self._table.delete(self._scope_filter)
 
     def get_record(self, record_id: str) -> Optional[MemoryRecord]:
         results = self._table.search().where(f"id = '{record_id}'").limit(1).to_list()

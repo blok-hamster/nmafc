@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from nmafc.schemas.memory import DecayConfig, MemoryRecord, MemoryStateUpdate
-from nmafc.storage.cold import ColdStorage
+from nmafc.storage.cold_base import ColdStorageBase
 from nmafc.storage.hot import HotStorage
 
 
@@ -37,7 +37,7 @@ def identify_prunable(records: list[MemoryRecord], w_prune: float) -> list[str]:
 
 def prune_cycle(
     hot: HotStorage,
-    cold: ColdStorage,
+    cold: ColdStorageBase,
     w_prune: float,
     current_turn: int,
 ) -> int:

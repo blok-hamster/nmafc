@@ -26,14 +26,29 @@ class StorageConfig(BaseModel):
     )
     cold_uri: str = Field(
         default="./data/cold.db",
-        description="SQLite database path for the Cold ROM event log.",
+        description=(
+            "Cold ROM URI. Local .db path for SQLite, or "
+            "postgresql:// DSN for remote PostgreSQL."
+        ),
     )
     embedding_dim: int = Field(default=1536, gt=0)
     embedding_model: str = Field(default="text-embedding-3-small")
+    agent_id: str = Field(
+        default="default",
+        description="Namespace for agent/tenant isolation. All storage queries are scoped to this ID.",
+    )
+    conversation_id: str = Field(
+        default="default",
+        description="Conversation session ID. Isolates memories between separate conversation threads.",
+    )
 
     @property
     def is_cloud(self) -> bool:
         return self.hot_uri.startswith("s3://")
+
+    @property
+    def cold_is_postgres(self) -> bool:
+        return self.cold_uri.startswith("postgresql://") or self.cold_uri.startswith("postgres://")
 
 
 class NMafcConfig(BaseModel):
@@ -82,6 +97,10 @@ class NMafcConfig(BaseModel):
             config.storage.hot_uri = hot_uri
         if cold_uri := os.environ.get("NMAFC_COLD_URI"):
             config.storage.cold_uri = cold_uri
+        if agent_id := os.environ.get("NMAFC_AGENT_ID"):
+            config.storage.agent_id = agent_id
+        if conversation_id := os.environ.get("NMAFC_CONVERSATION_ID"):
+            config.storage.conversation_id = conversation_id
         if llm := os.environ.get("NMAFC_LLM_PROVIDER_MODEL"):
             config.llm_provider_model = llm
         if emb := os.environ.get("NMAFC_EMBEDDING_PROVIDER_MODEL"):

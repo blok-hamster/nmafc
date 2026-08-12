@@ -23,6 +23,9 @@ llm = [
 aws = [
     "boto3>=1.28",
 ]
+postgres = [
+    "psycopg2-binary>=2.9",
+]
 bench = [
     "huggingface-hub>=0.20",
     "pandas>=2.0",
@@ -30,7 +33,7 @@ bench = [
     "kaleido>=0.2.1",
     "rouge-score>=0.1.2",
 ]
-all = ["nmafc[llm,aws,bench]"]
+all = ["nmafc[llm,aws,postgres,bench]"]
 
 [dependency-groups]
 dev = [

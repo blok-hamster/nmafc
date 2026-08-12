@@ -6,17 +6,20 @@ from pathlib import Path
 from typing import Any
 
 from nmafc.schemas.memory import MemoryStateUpdate
+from nmafc.storage.cold_base import ColdStorageBase
 
 
-class ColdStorage:
+class ColdStorage(ColdStorageBase):
     """Append-only SQLite event log (Cold ROM).
 
     Stores 100% of raw state-change events as an immutable audit trail.
     Supports full-text search via FTS5 for fallback retrieval.
     """
 
-    def __init__(self, db_path: str) -> None:
+    def __init__(self, db_path: str, agent_id: str = "default", conversation_id: str = "default") -> None:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        self._agent_id = agent_id
+        self._conversation_id = conversation_id
         self._conn = sqlite3.connect(db_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -26,6 +29,8 @@ class ColdStorage:
         self._conn.executescript("""
             CREATE TABLE IF NOT EXISTS memory_event_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id TEXT NOT NULL DEFAULT 'default',
+                conversation_id TEXT NOT NULL DEFAULT 'default',
                 timestamp TEXT NOT NULL,
                 turn INTEGER NOT NULL,
                 entity_name TEXT NOT NULL,
@@ -41,6 +46,9 @@ class ColdStorage:
             CREATE INDEX IF NOT EXISTS idx_is_active
                 ON memory_event_log(is_active);
 
+            CREATE INDEX IF NOT EXISTS idx_agent_conversation
+                ON memory_event_log(agent_id, conversation_id);
+
             CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts
                 USING fts5(entity_name, fact_content, content=memory_event_log, content_rowid=id);
 
@@ -55,9 +63,11 @@ class ColdStorage:
     def append_event(self, update: MemoryStateUpdate, turn: int) -> int:
         cursor = self._conn.execute(
             """INSERT INTO memory_event_log
-               (timestamp, turn, entity_name, fact_content, memory_type, overrides_entity)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+               (agent_id, conversation_id, timestamp, turn, entity_name, fact_content, memory_type, overrides_entity)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
+                self._agent_id,
+                self._conversation_id,
                 datetime.now(timezone.utc).isoformat(),
                 turn,
                 update.entity_name,
@@ -78,14 +88,19 @@ class ColdStorage:
 
     def get_active_events(self) -> list[dict[str, Any]]:
         cursor = self._conn.execute(
-            "SELECT * FROM memory_event_log WHERE is_active = 1 ORDER BY turn ASC, id ASC"
+            """SELECT * FROM memory_event_log
+               WHERE agent_id = ? AND conversation_id = ? AND is_active = 1
+               ORDER BY turn ASC, id ASC""",
+            (self._agent_id, self._conversation_id),
         )
         return [dict(row) for row in cursor.fetchall()]
 
     def get_events_for_entity(self, entity_name: str) -> list[dict[str, Any]]:
         cursor = self._conn.execute(
-            "SELECT * FROM memory_event_log WHERE entity_name = ? AND is_active = 1 ORDER BY turn ASC",
-            (entity_name,),
+            """SELECT * FROM memory_event_log
+               WHERE agent_id = ? AND conversation_id = ? AND entity_name = ? AND is_active = 1
+               ORDER BY turn ASC""",
+            (self._agent_id, self._conversation_id, entity_name),
         )
         return [dict(row) for row in cursor.fetchall()]
 
@@ -96,10 +111,11 @@ class ColdStorage:
         cursor = self._conn.execute(
             """SELECT mel.* FROM memory_fts
                JOIN memory_event_log mel ON memory_fts.rowid = mel.id
-               WHERE memory_fts MATCH ? AND mel.is_active = 1
+               WHERE memory_fts MATCH ? AND mel.agent_id = ? AND mel.conversation_id = ?
+                 AND mel.is_active = 1
                ORDER BY rank
                LIMIT ?""",
-            (sanitized, limit),
+            (sanitized, self._agent_id, self._conversation_id, limit),
         )
         return [dict(row) for row in cursor.fetchall()]
 
@@ -118,13 +134,17 @@ class ColdStorage:
 
     def count_active(self) -> int:
         cursor = self._conn.execute(
-            "SELECT COUNT(*) FROM memory_event_log WHERE is_active = 1"
+            "SELECT COUNT(*) FROM memory_event_log WHERE agent_id = ? AND conversation_id = ? AND is_active = 1",
+            (self._agent_id, self._conversation_id),
         )
         row = cursor.fetchone()
         return int(row[0]) if row else 0
 
     def count_total(self) -> int:
-        cursor = self._conn.execute("SELECT COUNT(*) FROM memory_event_log")
+        cursor = self._conn.execute(
+            "SELECT COUNT(*) FROM memory_event_log WHERE agent_id = ? AND conversation_id = ?",
+            (self._agent_id, self._conversation_id),
+        )
         row = cursor.fetchone()
         return int(row[0]) if row else 0
 

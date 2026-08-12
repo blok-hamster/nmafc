@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Callable
 from nmafc.schemas.memory import DecayConfig, MemoryType
-from nmafc.storage.cold import ColdStorage
+from nmafc.storage.cold_base import ColdStorageBase
 from nmafc.storage.hot import HotStorage
 
 
@@ -15,7 +15,7 @@ class MemoryConsolidator:
     3. Prune broken or stale related_entities pointers.
     """
 
-    def __init__(self, hot: HotStorage, cold: ColdStorage, config: DecayConfig) -> None:
+    def __init__(self, hot: HotStorage, cold: ColdStorageBase, config: DecayConfig) -> None:
         self._hot = hot
         self._cold = cold
         self._config = config

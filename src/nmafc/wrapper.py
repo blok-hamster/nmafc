@@ -9,7 +9,7 @@ from nmafc.integration.base import EmbeddingProvider, LLMProvider
 from nmafc.integration.extractor import StateExtractor
 from nmafc.integration.query_router import QueryRouter
 from nmafc.schemas.memory import DecayConfig, MemoryRecord, MemoryStateUpdate, UnifiedMemoryPayload
-from nmafc.storage.cold import ColdStorage
+from nmafc.storage.cold_base import ColdStorageBase
 from nmafc.storage.config import NMafcConfig
 from nmafc.storage.hot import HotStorage
 
@@ -52,7 +52,20 @@ class NeuromorphicMemory:
         self._current_turn: int = 0
 
         self._hot = HotStorage(config.storage)
-        self._cold = ColdStorage(config.storage.cold_uri)
+        if config.storage.cold_is_postgres:
+            from nmafc.storage.cold_pg import PostgresColdStorage
+            self._cold: ColdStorageBase = PostgresColdStorage(
+                config.storage.cold_uri,
+                agent_id=config.storage.agent_id,
+                conversation_id=config.storage.conversation_id,
+            )
+        else:
+            from nmafc.storage.cold import ColdStorage
+            self._cold = ColdStorage(
+                config.storage.cold_uri,
+                agent_id=config.storage.agent_id,
+                conversation_id=config.storage.conversation_id,
+            )
         self._embedder = embedding_provider
         self._extractor = StateExtractor(llm_provider)
         self._router = QueryRouter(

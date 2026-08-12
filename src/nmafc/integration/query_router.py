@@ -3,7 +3,7 @@ from __future__ import annotations
 from nmafc.engine.reinforcement import reinforce
 from nmafc.integration.base import EmbeddingProvider
 from nmafc.schemas.memory import DecayConfig, MemoryRecord, MemoryType
-from nmafc.storage.cold import ColdStorage
+from nmafc.storage.cold_base import ColdStorageBase
 from nmafc.storage.hot import HotStorage
 
 
@@ -19,7 +19,7 @@ class QueryRouter:
     def __init__(
         self,
         hot: HotStorage,
-        cold: ColdStorage,
+        cold: ColdStorageBase,
         embedder: EmbeddingProvider,
         config: DecayConfig,
     ) -> None:
