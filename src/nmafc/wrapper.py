@@ -32,6 +32,21 @@ class NeuromorphicMemory:
         if config is None:
             config = NMafcConfig.from_env_or_toml(config_path)
 
+        # Auto-detect embedding dimension if using default or un-synced config
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    sample_vec = pool.submit(asyncio.run, embedding_provider.embed_single("test")).result()
+            else:
+                sample_vec = asyncio.run(embedding_provider.embed_single("test"))
+            if sample_vec and len(sample_vec) > 0:
+                config.storage.embedding_dim = len(sample_vec)
+        except Exception:
+            pass
+
         self._config = config
         self._decay_config = config.decay
         self._current_turn: int = 0

@@ -23,15 +23,21 @@ from __future__ import annotations
 import os
 from typing import Any
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from nmafc.integration.base import EmbeddingProvider, LLMProvider
 
 PROVIDER_BASE_URLS: dict[str, str] = {
     "groq": "https://api.groq.com/openai/v1",
     "openrouter": "https://openrouter.ai/api/v1",
     "together": "https://api.together.xyz/v1",
-    "ollama": "http://localhost:11434/v1",
-    "lmstudio": "http://localhost:1234/v1",
-    "vllm": "http://localhost:8000/v1",
+    "ollama": os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+    "lmstudio": os.environ.get("LMSTUDIO_BASE_URL", "http://localhost:1234/v1"),
+    "vllm": os.environ.get("VLLM_BASE_URL", "http://localhost:8000/v1"),
 }
 
 PROVIDER_API_KEY_ENV: dict[str, str] = {

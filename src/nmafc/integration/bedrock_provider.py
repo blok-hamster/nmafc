@@ -4,7 +4,7 @@ import json
 from typing import Any, cast
 
 from nmafc.integration.base import EmbeddingProvider, LLMProvider
-from nmafc.schemas.memory import MemoryStateUpdate, MemoryType, UnifiedMemoryPayload
+from nmafc.schemas.memory import MemoryStateUpdate, UnifiedMemoryPayload
 
 BEDROCK_TOOL_SCHEMA: dict[str, Any] = {
     "toolSpec": {
@@ -43,7 +43,10 @@ BEDROCK_TOOL_SCHEMA: dict[str, Any] = {
                                 "related_entities": {
                                     "type": "array",
                                     "items": {"type": "string"},
-                                    "description": "Entity names linked to this fact for graph spreading activation (e.g. ['spouse_james', 'brother_david']).",
+                                    "description": (
+                                        "Entity names linked to this fact for graph "
+                                        "spreading activation (e.g. ['spouse_james', 'brother']). "
+                                    ),
                                 },
                             },
                             "required": ["entity_name", "fact_content", "memory_type"],
@@ -156,7 +159,7 @@ class BedrockAnthropicProvider(LLMProvider):
         api_key: str | None = None,
     ) -> None:
         try:
-            from anthropic import AsyncAnthropicBedrock
+            from anthropic import AsyncAnthropicBedrock  # type: ignore[attr-defined]
         except ImportError as e:
             raise ImportError(
                 "Install anthropic: pip install nmafc[llm]"
@@ -173,15 +176,28 @@ class BedrockAnthropicProvider(LLMProvider):
         messages: list[dict],
         system_prompt: str,
     ) -> tuple[str, list[MemoryStateUpdate]]:
+        import asyncio
+
         from nmafc.integration.anthropic_provider import MEMORY_TOOL_NAME, MEMORY_TOOL_SCHEMA
 
-        response = await self._client.messages.create(
-            model=self._model_id,
-            max_tokens=4096,
-            system=system_prompt,
-            messages=cast(Any, messages),
-            tools=cast(Any, [MEMORY_TOOL_SCHEMA]),
-        )
+        response = None
+        for attempt in range(10):
+            try:
+                response = await self._client.messages.create(
+                    model=self._model_id,
+                    max_tokens=4096,
+                    system=system_prompt,
+                    messages=cast(Any, messages),
+                    tools=cast(Any, [MEMORY_TOOL_SCHEMA]),
+                )
+                break
+            except Exception as exc:
+                if attempt == 9:
+                    raise exc
+                await asyncio.sleep(min(30.0, 1.5 * (2.0 ** attempt)))
+
+        if response is None:
+            return "", []
 
         response_text = ""
         updates: list[MemoryStateUpdate] = []

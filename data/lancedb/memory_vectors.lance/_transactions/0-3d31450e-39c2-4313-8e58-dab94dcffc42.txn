@@ -1,0 +1,4 @@
+$3d31450e-39c2-4313-8e58-dab94dcffc42²ë;vector ÿÿÿÿÿÿÿÿÿ*fixed_size_list:float:76808Zdefault&id ÿÿÿÿÿÿÿÿÿ*string08Zdefault/entity_name ÿÿÿÿÿÿÿÿÿ*string08Zdefault0fact_content ÿÿÿÿÿÿÿÿÿ*string08Zdefault/memory_type ÿÿÿÿÿÿÿÿÿ*string08Zdefault*weight ÿÿÿÿÿÿÿÿÿ*double08Zdefault6consolidation_index ÿÿÿÿÿÿÿÿÿ*int3208Zdefault2created_at_turn ÿÿÿÿÿÿÿÿÿ*int3208Zdefault7last_reinforced_turn ÿÿÿÿÿÿÿÿÿ*int3208Zdefault2related_entities	 ÿÿÿÿÿÿÿÿÿ*list08Zdefaultitem
+ 	*string08Zdefault"!
+lance.auto_cleanup.interval20"'
+lance.auto_cleanup.older_than14days

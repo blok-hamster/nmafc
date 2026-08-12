@@ -1,0 +1,523 @@
+# NMAFC — Neuromorphic Memory Architecture for Conversational AI
+
+A biologically-inspired stateful memory system for LLM agents. NMAFC gives conversational AI the ability to remember, forget, and prioritize information the way biological memory does — using exponential decay, spaced repetition, override suppression, and active pruning.
+
+Unlike context-window stuffing or naive vector stores that grow without bound, NMAFC maintains a bounded, high-signal memory that improves with use. Frequently accessed facts become permanent. Contradicted facts are immediately suppressed. Stale information naturally decays away.
+
+## Why NMAFC
+
+| Problem | Current Approaches | NMAFC Solution |
+|---------|-------------------|----------------|
+| Context windows overflow | Truncate oldest messages | Hot RAM with bounded record count via cognitive decay |
+| Contradictions persist | Old facts coexist with new ones | Override detection + gamma suppression (instant eviction) |
+| Everything treated equally | Flat vector stores | Three-tier typing: CoreAnchor (permanent), ActiveContext (moderate decay), EphemeralState (aggressive decay) |
+| No concept of importance | Retrieval count ignored | Spaced repetition — each retrieval strengthens retention (LTP) |
+| Retrieval misses related facts | Single-hop vector search | Spreading Activation graph traversal (multi-hop entity linking) |
+| No recoverability | Mutable state only | Dual-track: Hot RAM (fast, mutable) + Cold ROM (append-only event log, full rollback) |
+| Expensive per-turn overhead | Separate extraction + response calls | Single LLM call with tool-use for simultaneous response + extraction |
+
+## Core Mechanisms
+
+### 1. Three-Tier Memory Classification
+
+Every extracted fact is classified by the LLM into one of three tiers, each with distinct decay behavior:
+
+| Tier | Decay Rate (lambda) | Half-life | Examples |
+|------|---------------------|-----------|----------|
+| **CoreAnchor** | 0.0 (never decays) | Infinite | Name, allergies, identity, relationships |
+| **ActiveContext** | 0.05 per turn | ~14 turns | Current goals, schedules, projects |
+| **EphemeralState** | 0.69 per turn | ~1 turn | Mood, passing comments, transient state |
+
+### 2. Cognitive Decay (Ebbinghaus Forgetting Curve)
+
+Each memory's synaptic weight decays exponentially over time:
+
+```
+w(t) = w(t_0) * e^(-lambda * delta_t)
+```
+
+Where `delta_t = current_turn - last_reinforced_turn` and `lambda` is the tier-specific decay rate modified by the consolidation coefficient.
+
+### 3. Spaced Repetition (Long-Term Potentiation)
+
+When a memory is retrieved during a query, it receives LTP reinforcement:
+
+1. Weight resets to 1.0 (full strength)
+2. Consolidation index `k` increments
+3. Future decay rate slows: `effective_lambda = lambda_base * e^(-eta * k)` where `eta = 0.15`
+
+A fact retrieved 10 times retains 80% weight after 20 turns vs. 37% for a never-retrieved fact. This naturally surfaces important information.
+
+### 4. Override Detection & Suppression
+
+When the LLM detects a contradicting fact (e.g., "I moved to Berlin" contradicts "I live in Paris"):
+
+1. New fact specifies `overrides_entity` pointing to the old record
+2. Old record's weight is multiplied by `gamma = 0.1` (instant suppression)
+3. Next prune cycle evicts the old record (weight 0.1 <= prune threshold 0.1)
+
+Zero hallucination for contradictions — suppressed facts cannot be retrieved.
+
+### 5. Spreading Activation (Graph Traversal)
+
+Retrieval goes beyond single-hop vector search:
+
+1. **Hop 0:** Vector similarity search returns `top_k=10` results
+2. **Hop 1:** Each result's `related_entities` are fetched from Hot RAM
+3. **Hop 2:** Their `related_entities` are fetched (BFS continues to `max_hops=2`)
+
+Example: Query "spouse" -> `spouse_james` (vector hit) -> `related_entities: ["brother_david"]` -> `brother_david` -> `related_entities: ["job_pilot"]` -> `job_pilot`.
+
+This surfaces contextually related facts that pure vector similarity would miss.
+
+### 6. REM Sleep Consolidation
+
+Every 5 turns (configurable), a consolidation pass runs:
+
+- **Elevation:** ActiveContext records with `consolidation_index >= 10` are promoted to CoreAnchor (permanent protection). Frequently-accessed facts earn immortality.
+- **Dead pointer cleanup:** Removes `related_entities` references to entities that no longer exist in Hot RAM.
+
+### 7. Dual-Track Storage
+
+| Layer | Technology | Purpose | Mutability |
+|-------|-----------|---------|------------|
+| **Hot RAM** | LanceDB (embedded vector DB) | Fast retrieval, vector search, weight updates | Mutable (decay, reinforce, delete) |
+| **Cold ROM** | SQLite (WAL mode, FTS5) | Complete event log, keyword fallback, rollback source | Append-only |
+
+Cold ROM enables full state reconstruction at any point in time via event replay.
+
+## Architecture
+
+```
+                    ┌─────────────────────────────────────────────┐
+                    │           NeuromorphicMemory                 │
+                    │              (wrapper.py)                    │
+                    └────────┬──────────┬──────────┬──────────────┘
+                             │          │          │
+                    ┌────────▼──┐  ┌────▼────┐  ┌─▼──────────────┐
+                    │  Extract  │  │  Query  │  │    Engine       │
+                    │  (LLM +   │  │  Router │  │  ┌───────────┐  │
+                    │   Tool)   │  │         │  │  │   Decay   │  │
+                    └───────────┘  │ Vector  │  │  │  Reinforce│  │
+                                   │ Search  │  │  │   Prune   │  │
+                                   │ + Graph │  │  │  Consol.  │  │
+                                   │ + Cold  │  │  │  Rollback │  │
+                                   │ Fallback│  │  └───────────┘  │
+                                   └────┬────┘  └────────────────┘
+                                        │
+                         ┌──────────────┼──────────────┐
+                         │              │              │
+                    ┌────▼────┐    ┌────▼────┐    ┌───▼───┐
+                    │ Hot RAM │    │Cold ROM │    │Embedder│
+                    │(LanceDB)│    │(SQLite) │    │        │
+                    └─────────┘    └─────────┘    └────────┘
+```
+
+## Processing Pipeline
+
+Each call to `process_turn(user_msg)` executes this sequence:
+
+```
+1. Increment turn counter
+2. Retrieve context (vector search + spreading activation + cold fallback)
+3. Format retrieved memories as context string
+4. LLM call with tool-use → simultaneous response + state extraction
+5. For each extracted update:
+   a. Log to Cold ROM (append-only)
+   b. Detect overrides → suppress contradicted records (w *= gamma)
+   c. Embed new fact → upsert to Hot RAM (weight=1.0)
+6. Decay all mutable records: w(t) = w(t0) * e^(-lambda * dt)
+7. Prune: delete records where weight <= w_prune
+8. Every N turns: REM consolidation (elevation + dead pointer cleanup)
+```
+
+## Installation
+
+```bash
+# Core only
+pip install nmafc
+
+# With LLM providers (OpenAI + Anthropic SDKs)
+pip install nmafc[llm]
+
+# With AWS Bedrock support
+pip install nmafc[aws]
+
+# With benchmark suite
+pip install nmafc[bench]
+
+# Everything
+pip install nmafc[all]
+
+# Development (from source)
+git clone https://github.com/blok-hamster/nmafc.git
+cd nmafc
+uv pip install -e ".[all]"
+uv pip install --group dev
+```
+
+## Quick Start
+
+```python
+import asyncio
+from nmafc.wrapper import NeuromorphicMemory
+from nmafc.integration.factory import create_llm_provider, create_embedding_provider
+
+async def main():
+    # Create providers
+    llm = create_llm_provider("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0")
+    embedder = create_embedding_provider("ollama/nomic-embed-text")
+
+    # Initialize memory
+    mem = NeuromorphicMemory(llm_provider=llm, embedding_provider=embedder)
+
+    # Process conversation turns
+    response = await mem.process_turn(
+        user_msg="My name is Joshua and I'm allergic to shellfish.",
+        conversation_history=[
+            {"role": "user", "content": "My name is Joshua and I'm allergic to shellfish."}
+        ],
+    )
+    print(response)
+
+    # Memory now contains:
+    #   [CoreAnchor] user_name: "Joshua"
+    #   [CoreAnchor] user_allergy: "Allergic to shellfish"
+
+    # Later turns can reference these facts
+    response = await mem.process_turn(
+        user_msg="What should I avoid eating?",
+        conversation_history=[
+            {"role": "user", "content": "What should I avoid eating?"}
+        ],
+    )
+    print(response)  # Will reference shellfish allergy from memory
+
+    # Check memory state
+    stats = mem.get_hot_stats()
+    print(f"Records: {stats['count']}, Types: {stats['types']}")
+
+    mem.close()
+
+asyncio.run(main())
+```
+
+### Using Config File
+
+```python
+from nmafc.wrapper import NeuromorphicMemory
+from nmafc.storage.config import NMafcConfig
+
+# From TOML config
+mem = NeuromorphicMemory.from_config(config_path="configs/default.toml")
+
+# Or from environment variables (NMAFC_LLM_PROVIDER_MODEL, NMAFC_EMBEDDING_PROVIDER_MODEL)
+mem = NeuromorphicMemory.from_config()
+```
+
+### Override Detection
+
+```python
+# Turn 1: Store a fact
+await mem.process_turn("I live in Paris.")
+# Hot RAM: [ActiveContext] user_location: "Lives in Paris"
+
+# Turn 5: Contradiction arrives
+await mem.process_turn("I just moved to Berlin last week.")
+# Hot RAM: [ActiveContext] user_location: "Moved to Berlin" (weight=1.0)
+# The old "Paris" record is suppressed (w *= 0.1) and pruned
+
+# Query will ONLY return Berlin, never Paris
+```
+
+### Manual Memory Injection
+
+```python
+from nmafc.schemas.memory import MemoryStateUpdate
+
+# Inject facts without an LLM call (useful for bootstrapping)
+await mem.ingest_updates([
+    MemoryStateUpdate(
+        entity_name="user_name",
+        fact_content="User's name is Joshua",
+        memory_type="CoreAnchor",
+    ),
+    MemoryStateUpdate(
+        entity_name="user_project",
+        fact_content="Currently working on NMAFC framework",
+        memory_type="ActiveContext",
+        related_entities=["user_role"],
+    ),
+])
+```
+
+### Rollback
+
+```python
+# Restore memory state to how it was at turn 10
+restored_count = await mem.rollback(to_turn=10)
+print(f"Restored {restored_count} records from Cold ROM")
+```
+
+## Configuration
+
+### Default Configuration (`configs/default.toml`)
+
+```toml
+[decay]
+lambda_core_anchor = 0.0       # CoreAnchor never decays
+lambda_active_context = 0.05   # Moderate decay (~14 turn half-life)
+lambda_ephemeral = 0.69        # Aggressive decay (~1 turn half-life)
+eta = 0.15                     # Consolidation constant (higher = faster LTP effect)
+gamma = 0.1                    # Override suppression multiplier
+w_prune = 0.1                  # Eviction threshold (records at or below are deleted)
+theta = 0.75                   # Retrieval similarity threshold
+top_k = 10                     # Vector search result count
+max_hops = 2                   # Spreading Activation graph depth
+fallback_keyword_limit = 20    # Cold ROM FTS5 result limit
+auto_consolidate_turns = 5     # REM sleep interval
+time_unit = "turns"            # Decay time unit
+
+[storage]
+hot_uri = "./data/lancedb"     # LanceDB path (supports s3://)
+cold_uri = "./data/cold.db"    # SQLite path
+embedding_dim = 1536           # Auto-detected on init
+
+[llm]
+provider_model = "openai/gpt-4o-mini"
+
+[embedding]
+provider_model = "openai/text-embedding-3-small"
+```
+
+### Environment Variable Overrides
+
+| Variable | Overrides | Description |
+|----------|-----------|-------------|
+| `NMAFC_HOT_URI` | `storage.hot_uri` | Hot RAM storage path |
+| `NMAFC_COLD_URI` | `storage.cold_uri` | Cold ROM storage path |
+| `NMAFC_LLM_PROVIDER_MODEL` | `llm.provider_model` | Default LLM provider |
+| `NMAFC_EMBEDDING_PROVIDER_MODEL` | `embedding.provider_model` | Default embedding provider |
+
+## Supported Providers
+
+### LLM Providers
+
+| Provider | Format | API Key Env |
+|----------|--------|-------------|
+| OpenAI | `openai/gpt-4o` | `OPENAI_API_KEY` |
+| Anthropic | `anthropic/claude-sonnet-4-20250514` | `ANTHROPIC_API_KEY` |
+| AWS Bedrock | `bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0` | `ANTHROPIC_API_KEY_BEDROCK` |
+| Azure OpenAI | `azure/DeepSeek-V4-Pro` | `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_ENDPOINT` |
+| Groq | `groq/llama-3.1-70b-versatile` | `GROQ_API_KEY` |
+| OpenRouter | `openrouter/anthropic/claude-sonnet-4-20250514` | `OPENROUTER_API_KEY` |
+| Together | `together/meta-llama/Llama-3-70b-chat-hf` | `TOGETHER_API_KEY` |
+| Ollama | `ollama/llama3.2` | None (local) |
+| LM Studio | `lmstudio/local-model` | None (local) |
+| vLLM | `vllm/meta-llama/Llama-3-8b` | None (local) |
+
+### Embedding Providers
+
+| Provider | Format | Dimensions |
+|----------|--------|-----------|
+| OpenAI | `openai/text-embedding-3-small` | 1536 |
+| OpenAI | `openai/text-embedding-3-large` | 3072 |
+| Azure OpenAI | `azure/text-embedding-3-small` | 1536 |
+| Bedrock Titan | `bedrock/amazon.titan-embed-text-v2:0` | 1024 |
+| Ollama | `ollama/nomic-embed-text` | 768 |
+| Ollama | `ollama/mxbai-embed-large` | 1024 |
+| Together | `together/togethercomputer/m2-bert-80M-8k-retrieval` | 768 |
+| FastEmbed (ONNX) | Built-in `BAAI/bge-small-en-v1.5` | 384 |
+
+Embedding dimension is auto-detected on initialization — no manual configuration needed.
+
+## Credential Setup
+
+Copy the example and fill in keys for providers you use:
+
+```bash
+cp .env.example .env
+```
+
+The framework loads `.env` automatically via `python-dotenv`. See [.env.example](.env.example) for all supported variables.
+
+## Benchmark Suite
+
+Academic-grade evaluation comparing three memory approaches on real research datasets.
+
+### Datasets
+
+- **LoCoMo** (Maharana et al., 2024): 10 conversations, 1986 QA pairs, 5 categories
+- **LongMemEval** (Wu et al., 2024 / Zep paper): 500 questions, 6 types, 3 variants
+
+### Three Arms
+
+1. **Raw LLM** — Full context window stuffing (baseline)
+2. **Stateful No-Decay** — NMAFC with decay disabled (MemGPT/Zep-style "keep everything")
+3. **Neuromorphic** — Full NMAFC with production config (the proposed system)
+
+### Quick Start
+
+```bash
+# Install benchmark dependencies
+uv pip install -e ".[bench,llm,aws]"
+
+# Start Ollama for embeddings
+ollama serve && ollama pull nomic-embed-text
+
+# Run LoCoMo benchmark (1 conversation, single-hop, F1 only)
+PYTHONUNBUFFERED=1 python -m scripts.benchmarks.run_locomo \
+  --provider "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0" \
+  --embedding "ollama/nomic-embed-text" \
+  --conversations 1 --categories "1" --skip-judge
+
+# Run LongMemEval (10 questions, oracle variant)
+PYTHONUNBUFFERED=1 python -m scripts.benchmarks.run_longmemeval \
+  --provider "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0" \
+  --embedding "ollama/nomic-embed-text" \
+  --variant oracle --limit 10
+```
+
+See [scripts/benchmarks/README.md](scripts/benchmarks/README.md) for full documentation of all flags, examples, and output format.
+
+## Mathematical Specification
+
+### Memory State Tuple
+
+Each record in Hot RAM: `S_i = <v_i, w_i(t), tau_i, k_i>`
+
+| Symbol | Type | Description |
+|--------|------|-------------|
+| `v_i` | R^d | Embedding vector |
+| `w_i(t)` | [0, 1.0] | Synaptic weight at time t |
+| `tau_i` | Enum | Memory type (CoreAnchor, ActiveContext, EphemeralState) |
+| `k_i` | N >= 0 | Consolidation index (retrieval count) |
+
+### Decay Formula
+
+```
+w_i(t) = w_i(t_0) * exp(-lambda_eff * delta_t)
+
+where:
+  delta_t = current_turn - last_reinforced_turn
+  lambda_eff = lambda_base(tau_i) * alpha(k_i)
+  alpha(k) = exp(-eta * k)
+  eta = 0.15
+```
+
+### Decay Comparison Table
+
+| Tier | lambda_base | After 10 turns (k=0) | After 10 turns (k=5) | After 10 turns (k=10) |
+|------|-------------|----------------------|----------------------|-----------------------|
+| CoreAnchor | 0.0 | 1.000 | 1.000 | 1.000 |
+| ActiveContext | 0.05 | 0.607 | 0.858 | 0.951 |
+| EphemeralState | 0.69 | 0.001 | 0.056 | 0.314 |
+
+### LTP Reinforcement (on retrieval)
+
+```
+w_i = 1.0                           # Reset to full strength
+k_i = k_i + 1                       # Increment consolidation index
+last_reinforced_turn = current_turn  # Reset decay clock
+```
+
+### Override Suppression
+
+```
+w_old = w_old * gamma    (gamma = 0.1, default)
+```
+
+### Pruning Condition
+
+```
+if w_i <= w_prune (default 0.1): delete from Hot RAM
+```
+
+### Consolidation Elevation
+
+```
+if k_i >= 10 AND tau_i == ActiveContext:
+    tau_i = CoreAnchor    # Promoted — never decays again
+    w_i = 1.0            # Reset to full weight
+```
+
+## Project Structure
+
+```
+nmafc/
+├── src/nmafc/
+│   ├── wrapper.py                 # Top-level NeuromorphicMemory class
+│   ├── schemas/
+│   │   └── memory.py              # Pydantic models (MemoryRecord, DecayConfig, etc.)
+│   ├── engine/
+│   │   ├── decay.py               # Ebbinghaus exponential decay
+│   │   ├── reinforcement.py       # LTP (weight reset + k increment)
+│   │   ├── pruning.py             # Override detection + eviction
+│   │   ├── consolidation.py       # REM sleep (elevation + cleanup)
+│   │   └── rollback.py            # State reconstruction from Cold ROM
+│   ├── integration/
+│   │   ├── factory.py             # Provider factory (provider/model strings)
+│   │   ├── base.py                # Abstract LLMProvider + EmbeddingProvider
+│   │   ├── extractor.py           # StateExtractor (tool-use based extraction)
+│   │   ├── query_router.py        # Retrieval + Spreading Activation
+│   │   ├── openai_provider.py     # OpenAI / OpenAI-compatible
+│   │   ├── anthropic_provider.py  # Anthropic native
+│   │   ├── bedrock_provider.py    # AWS Bedrock (boto3 + Anthropic SDK)
+│   │   ├── azure_provider.py      # Azure OpenAI
+│   │   └── fastembed_provider.py  # ONNX CPU embeddings
+│   └── storage/
+│       ├── config.py              # NMafcConfig + TOML parsing
+│       ├── hot.py                 # HotStorage (LanceDB)
+│       └── cold.py                # ColdStorage (SQLite + FTS5)
+├── configs/
+│   └── default.toml               # Default configuration
+├── scripts/benchmarks/             # Academic benchmark suite
+│   ├── datasets/                   # LoCoMo + LongMemEval loaders
+│   ├── arms/                       # 3 benchmark conditions
+│   ├── evaluation/                 # F1 + LLM-as-judge metrics
+│   ├── run_locomo.py              # LoCoMo CLI runner
+│   ├── run_longmemeval.py         # LongMemEval CLI runner
+│   └── visualize.py               # Publication-ready Plotly charts
+├── tests/                          # pytest suite (unit + integration)
+├── .env.example                    # All provider credential variables
+└── pyproject.toml                  # Package metadata + dependencies
+```
+
+## Testing
+
+```bash
+# Run all tests
+pytest
+
+# Run specific test categories
+pytest tests/test_decay.py -v
+pytest tests/test_wrapper_e2e.py -v
+
+# Run with coverage
+pytest --cov=nmafc
+```
+
+## Biological Analogies
+
+| NMAFC Mechanism | Biological Analogue | Function |
+|-----------------|---------------------|----------|
+| Exponential decay | Ebbinghaus forgetting curve | Unused memories fade naturally |
+| LTP reinforcement | Long-Term Potentiation | Repeated retrieval strengthens synapses |
+| CoreAnchor promotion | Memory consolidation | Important facts move to permanent storage |
+| Override suppression | Synaptic depression | Contradicted pathways are weakened |
+| Pruning cycle | Synaptic homeostasis | Weak connections are physically removed |
+| REM consolidation | Sleep-dependent memory processing | Periodic restructuring and promotion |
+| Spreading Activation | Associative priming | Related concepts activate each other |
+| Hot RAM / Cold ROM | Working memory / Long-term memory | Fast-access vs. archival storage |
+
+## References
+
+- Maharana et al. (2024). "LoCoMo: Long-term Conversational Memory Dataset" — F1 evaluation protocol
+- Rasmussen et al. (2025). "Zep: A Temporal Knowledge Graph Architecture for Agent Memory" — LLM-as-judge evaluation, LongMemEval benchmark
+- Packer et al. (2024). "MemGPT: Towards LLMs as Operating Systems" — Stateful agent memory design
+- Zhong et al. (2023). "MemoryBank: Enhancing Large Language Models with Long-Term Memory" — Ebbinghaus-inspired decay
+- Ebbinghaus (1885). "Memory: A Contribution to Experimental Psychology" — Forgetting curve
+
+## License
+
+MIT

@@ -1,0 +1,326 @@
+{
+  "arm": "raw_llm",
+  "completed_conversations": 1,
+  "results": [
+    {
+      "question": "What did Caroline research?",
+      "gold_answer": "Adoption agencies",
+      "predicted": "Based on the conversation history, Caroline researched **adoption agencies**. \n\nShe applied to adoption agencies early in the conversation, attended an adoption advice/assistance group, and later researched specific adoption agencies that help LGBTQ+ folks with adoption. She eventually passed adoption agency interviews and is pursuing her goal of becoming a mom through adoption.\n\nShe also mentioned researching **counseling and mental health careers**, as she's passionate about helping people, particularly those in the trans community, with their mental health and acceptance.",
+      "category": "single-hop",
+      "f1": 0.052631578947368425,
+      "judge_correct": null,
+      "latency_ms": 4005.1845100024366,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What is Caroline's identity?",
+      "gold_answer": "Transgender woman",
+      "predicted": "Based on the conversation history, Caroline is a transgender woman. Key aspects of her identity include:\n\n1. **Transgender**: She has been transitioning for about 3 years and is proud of her identity as a trans woman.\n\n2. **LGBTQ+ activist**: She's deeply involved in LGBTQ+ advocacy and community work, including:\n   - Joining LGBTQ support groups and activist organizations\n   - Speaking at school events about her transgender journey\n   - Attending pride parades and LGBTQ conferences\n   - Volunteering at an LGBTQ+ youth center\n   - Mentoring transgender youth\n\n3. **Artist**: She expresses herself through multiple art forms:\n   - Painting (her primary medium)\n   - Drawing\n   - Recently learning piano\n   - Her art often explores her trans experience and themes of identity, acceptance, and community strength\n\n4. **Aspiring counselor/mental health professional**: She's passionate about pursuing counseling or mental health work to help others, particularly those in the trans community, because her own journey with mental health support was transformative.\n\n5. **Future parent**: She's pursuing adoption to create a loving, accepting home for children in need.\n\n6. **Swedish heritage**: She's from Sweden originally and values family connections from her home country.\n\nOverall, Caroline's identity is deeply rooted in authenticity, self-acceptance, community support, creative expression, and a commitment to helping others in the LGBTQ+ community.",
+      "category": "single-hop",
+      "f1": 0.020833333333333332,
+      "judge_correct": null,
+      "latency_ms": 5404.824576002284,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What is Caroline's relationship status?",
+      "gold_answer": "Single",
+      "predicted": "Based on the conversation history, Caroline's relationship status is not clearly defined. \n\nWhat I can tell you is that:\n- She mentioned having a \"tough breakup\" in the past (she said her friends have been there for her \"especially after that tough breakup\")\n- She is currently focused on her adoption journey and building a family as a single parent\n- There is no mention of her being in a current romantic relationship\n\nSo it appears Caroline is currently single, though she hasn't explicitly stated her relationship status in recent conversations.",
+      "category": "single-hop",
+      "f1": 0.024096385542168676,
+      "judge_correct": null,
+      "latency_ms": 3164.0556099991954,
+      "context_tokens": 15415
+    },
+    {
+      "question": "Where did Caroline move from 4 years ago?",
+      "gold_answer": "Sweden",
+      "predicted": "Based on the conversation history, Caroline moved from her home country, **Sweden**, 4 years ago. She mentions this when talking about her support system, saying \"I've known these friends for 4 years, since I moved from my home country.\" This is also connected to the necklace she treasures, which was a gift from her grandma in Sweden.",
+      "category": "single-hop",
+      "f1": 0.03636363636363636,
+      "judge_correct": null,
+      "latency_ms": 2224.8412310000276,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What career path has Caroline decided to persue?",
+      "gold_answer": "counseling or mental health for Transgender people",
+      "predicted": "Based on the conversation history, Caroline has decided to pursue **counseling and mental health work**.\n\nShe's been exploring this career path with the goal of helping people, particularly transgender individuals and those in the LGBTQ+ community who have gone through similar experiences to her own. She mentioned that her own struggles with mental health and the support she received made her realize how important it is for others to have someone to talk to and a support system. She attended an LGBTQ+ counseling workshop to learn more about therapeutic methods and how to best work with trans people.\n\nAdditionally, Caroline has been mentoring LGBTQ youth as part of a mentorship program, which aligns with her passion for helping others on their own journeys.",
+      "category": "single-hop",
+      "f1": 0.09756097560975609,
+      "judge_correct": null,
+      "latency_ms": 3098.7661730032414,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What activities does Melanie partake in?",
+      "gold_answer": "pottery, camping, painting, swimming",
+      "predicted": "",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": null,
+      "latency_ms": 2867.6339789999474,
+      "context_tokens": 15415
+    },
+    {
+      "question": "Where has Melanie camped?",
+      "gold_answer": "beach, mountains, forest",
+      "predicted": "Based on the conversation history, Melanie has camped in the following places:\n\n1. **Mountains** - She took her family camping in the mountains and they roasted marshmallows, told stories around the campfire, and enjoyed each other's company. This is described as the highlight of her summer.\n\n2. **Forest** - She mentioned going on a camping trip in the forest with her family and enjoying hiking in the mountains and exploring forests together.\n\n3. **Beach** - She took the kids to the beach for a camping trip (mentioned in one of the more recent conversations).\n\nHer camping trips seem to be a cherished family tradition where they bond, explore nature, and create special memories together.",
+      "category": "single-hop",
+      "f1": 0.05940594059405941,
+      "judge_correct": null,
+      "latency_ms": 2661.132967998128,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What do Melanie's kids like?",
+      "gold_answer": "dinosaurs, nature",
+      "predicted": "Based on the conversation history, Melanie's kids like:\n\n1. **Nature and outdoor activities** - They love exploring forests, hiking in the mountains, camping, and beach trips\n2. **The dinosaur exhibit** - They were particularly excited about the dinosaur exhibit at the museum, especially learning about animal bones\n3. **Creative activities** - They enjoy:\n   - Pottery workshops (making their own pots with clay)\n   - Painting together (especially nature-inspired paintings)\n   - Playing games\n4. **Concerts** - Melanie's daughter had a birthday celebration at a Matt Patterson concert\n5. **Playing and having fun** - At the park, they enjoyed exploring and playing\n6. **Marshmallows** - They roast marshmallows around the campfire during camping trips\n7. **Stories** - They enjoy hearing stories around the campfire\n\nOverall, Melanie's kids seem to enjoy family time, outdoor adventures, and creative/artistic activities!",
+      "category": "single-hop",
+      "f1": 0.017241379310344827,
+      "judge_correct": null,
+      "latency_ms": 3380.618073999358,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What books has Melanie read?",
+      "gold_answer": "\"Nothing is Impossible\", \"Charlotte's Web\"",
+      "predicted": "Based on the conversation history, I can find one book that Melanie mentions reading:\n\n**\"Charlotte's Web\"** - Melanie mentions this as a favorite book from her childhood. She recalls: \"I loved reading 'Charlotte's Web' as a kid. It was so cool seeing how friendship and compassion can make a difference.\"\n\nAdditionally, Melanie mentions reading \"that book you recommended a while ago\" when talking to Caroline about staying busy during her pottery injury recovery, but the specific title is not mentioned in the conversation.\n\nThat's all the specific book information I can find about Melanie's reading in the conversation history.",
+      "category": "single-hop",
+      "f1": 0.06382978723404255,
+      "judge_correct": null,
+      "latency_ms": 2745.4820290004136,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What does Melanie do to destress?",
+      "gold_answer": "Running, pottery",
+      "predicted": "Based on the conversation history, Melanie destresses through several activities:\n\n1. **Pottery** - She finds pottery very calming and uses it as a form of self-expression and therapy\n2. **Painting** - She paints landscapes and nature-inspired pieces, which helps her express her feelings and relax\n3. **Running** - She's been running to de-stress and clear her mind, which has been great for her mental health\n4. **Family time and nature** - She goes camping, hiking in mountains, and exploring forests with her family, which brings her peace and happiness\n5. **Music** - She plays the clarinet, which she started when young and uses as a way to express herself and relax\n6. **Reading** - She mentioned reading as a way to stay busy and keep occupied\n\nOverall, Melanie's main destressing outlets involve creative activities (pottery, painting, music) combined with quality time in nature with her family.",
+      "category": "single-hop",
+      "f1": 0.029197080291970802,
+      "judge_correct": null,
+      "latency_ms": 3488.331960001233,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What LGBTQ+ events has Caroline participated in?",
+      "gold_answer": "Pride parade, school speech, support group",
+      "predicted": "",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": null,
+      "latency_ms": 3612.290048997238,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What events has Caroline participated in to help children?",
+      "gold_answer": "Mentoring program, school speech",
+      "predicted": "Based on the conversation history, Caroline has participated in the following events to help children:\n\n1. **LGBTQ+ Youth Center Volunteering** - She volunteered at an LGBTQ+ youth center where she supported young people and shared her story with them, helping them feel less alone.\n\n2. **Youth Center Talent Show** - She helped organize a talent show for the kids at the youth center, which was designed to help them showcase their talents and feel proud of their abilities.\n\n3. **LGBTQ+ Mentorship Program** - Caroline joined a mentorship program for LGBTQ youth where she mentors a transgender teen. She helps build their confidence and supports them along their journey.\n\n4. **Pride Events with Mentee** - She attended LGBT pride events with her mentee, providing support and witnessing the positive impact of community acceptance on them.\n\n5. **Creating a Children's Library** - While not directly helping children yet, Caroline mentioned she's creating a library for when she has kids, planning to read to them and open up their minds with diverse books from different cultures.\n\n6. **Adoption Journey** - Caroline has been pursuing adoption to create a loving home for children in need, having passed adoption agency interviews and participated in council meetings for adoption.",
+      "category": "single-hop",
+      "f1": 0.010582010582010583,
+      "judge_correct": null,
+      "latency_ms": 3919.5064330015157,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What did Melanie paint recently?",
+      "gold_answer": "sunset",
+      "predicted": "Based on the conversation history, Melanie recently painted a sunset-inspired piece. She mentioned painting it last week and said it was inspired by sunsets, with colors that make her feel calm. The painting features peaceful blue streaks meant to show tranquility, along with vibrant colors for a serene vibe.\n\nAdditionally, Melanie and her kids recently finished another nature-inspired painting together over the last weekend, which featured flowers they found and had bold, beautiful colors highlighting nature's beauty.",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": null,
+      "latency_ms": 2875.135512997076,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What activities has Melanie done with her family?",
+      "gold_answer": "Pottery, painting, camping, museum, swimming, hiking",
+      "predicted": "",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": null,
+      "latency_ms": 4160.3480109988595,
+      "context_tokens": 15415
+    },
+    {
+      "question": "In what ways is Caroline participating in the LGBTQ community?",
+      "gold_answer": "Joining activist group, going to pride parades, participating in an art show, mentoring program",
+      "predicted": "",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": null,
+      "latency_ms": 3489.7921590018086,
+      "context_tokens": 15415
+    },
+    {
+      "question": "How many times has Melanie gone to the beach in 2023?",
+      "gold_answer": "2",
+      "predicted": "I don't have enough information to determine how many times Melanie went to the beach specifically in 2023. \n\nThe conversation history mentions Melanie going to the beach, but it doesn't provide specific dates or confirm these visits occurred in 2023. The only reference I can find is: \"Oh yeah, we went to the beach recently. It was awesome! The kids had such a blast\" and later \"We don't go often, usually only once or twice a year.\"\n\nHowever, this doesn't give me a clear count for 2023 specifically, as the timestamps aren't explicit in the conversation history.",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": null,
+      "latency_ms": 2560.2950869979395,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What kind of art does Caroline make?",
+      "gold_answer": "abstract art",
+      "predicted": "Based on the conversation history, Caroline makes several types of art:\n\n1. **Paintings** - This is her primary medium. She creates paintings exploring themes of trans identity, self-acceptance, and LGBTQ+ community. Examples include:\n   - A painting with red and blue colors representing the binary gender system and breaking rigid thinking about gender\n   - A sunset painting inspired by a beach visit\n   - Abstract paintings expressing her feelings\n   - A painting titled \"Embracing Identity\" about finding comfort and love in being yourself\n   - A painting capturing unity and strength after visiting an LGBTQ center\n\n2. **Stained glass window** - She created a stained glass piece for a local church depicting her transgender journey and the importance of accepting growth and change.\n\n3. **Self-portrait** - She made a self-portrait painting using blue, which she felt was liberated and empowering to create.\n\n4. **Drawing** - She draws flowers, which she finds empowering and cathartic.\n\n5. **Guitar playing** - While not visual art, she plays acoustic guitar (which she's been doing for about 5 years) as a form of self-expression to get her emotions out.\n\nOverall, Caroline uses art as a therapeutic outlet for self-expression, exploring her trans experience, and helping others understand and accept the LGBTQ+ community.",
+      "category": "single-hop",
+      "f1": 0.022099447513812154,
+      "judge_correct": null,
+      "latency_ms": 3980.6378270004643,
+      "context_tokens": 15415
+    },
+    {
+      "question": "Who supports Caroline when she has a negative experience?",
+      "gold_answer": "Her mentors, family, and friends",
+      "predicted": "Based on the conversation history, when Caroline has negative experiences, she is supported by:\n\n1. **Her friends and family** - She mentions they've been there for her throughout her journey, providing love, guidance, and acceptance, especially during her transition.\n\n2. **Her support network from the LGBTQ community** - She finds comfort in support groups, activist groups like \"Connected LGBTQ Activists,\" and LGBTQ centers that provide acceptance and understanding.\n\n3. **Mentors** - She references having mentors who have helped her through difficult times.\n\n4. **Melanie (you)** - Throughout the conversation, Melanie serves as a close friend who listens, encourages her, and reminds her of her strength when she faces challenges.\n\nFor example, when Caroline mentions having a negative experience on a hike with religious conservatives who upset her, she acknowledges that \"it's been so helpful to have people around me who accept and support me, so I know I'll be ok!\"\n\nHer support system is clearly central to her resilience and ability to navigate difficult moments.",
+      "category": "single-hop",
+      "f1": 0.0625,
+      "judge_correct": null,
+      "latency_ms": 3873.312884999905,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What types of pottery have Melanie and her kids made?",
+      "gold_answer": "bowls, cup",
+      "predicted": "",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": null,
+      "latency_ms": 2448.0672530007723,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What has Melanie painted?",
+      "gold_answer": "Horse, sunset, sunrise",
+      "predicted": "Based on the conversation history, Melanie has painted:\n\n1. **Lake sunrise** - painted last year, described as special to her with nice blending colors\n2. **Pottery bowl** - with colorful patterns and designs that catch the eye\n3. **Horse painting** - featuring a horse with grace and strength\n4. **Abstract painting** - with blue streaks meant to show tranquility and serenity with vibrant colors\n5. **Sunset painting** - inspired by sunsets, with calming colors\n6. **Nature-inspired paintings** - done together with her kids, including one with bold colors highlighting the beauty of nature and flowers\n\nMelanie is clearly very creative and uses painting as a form of self-expression, relaxation, and a way to connect with her family!",
+      "category": "single-hop",
+      "f1": 0.05555555555555556,
+      "judge_correct": null,
+      "latency_ms": 2908.5813199999393,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What are Melanie's pets' names?",
+      "gold_answer": "Oliver, Luna, Bailey",
+      "predicted": "Based on the conversation history, Melanie's pets are named **Luna** and **Oliver**. Luna is the dog and Oliver is the cat. Melanie mentioned they brighten up the house and are sweet and playful.",
+      "category": "single-hop",
+      "f1": 0.125,
+      "judge_correct": null,
+      "latency_ms": 2628.8023369997973,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What subject have Caroline and Melanie both painted?",
+      "gold_answer": "Sunsets",
+      "predicted": "Looking through the conversation history, both Caroline and Melanie have painted **nature-inspired pieces**, particularly:\n\n1. **Sunsets/landscapes** - Melanie painted a lake sunrise and a sunset painting inspired by nature. Caroline painted a sunset after visiting the beach.\n\n2. **Flowers** - Melanie mentioned painting flowers, and Caroline has drawn/painted flowers (she said \"Drawing flowers is one of my faves\").\n\n3. **Abstract/emotional pieces** - Both have created abstract paintings to express their feelings.\n\n4. **Unity and community themes** - Caroline painted a piece capturing \"everyone's unity and strength\" after visiting an LGBTQ center, and while Melanie's focus is more on landscapes and pottery, they both create art with emotional depth.\n\nThe most clearly shared subject would be **nature and landscapes**, particularly sunset/sunrise scenes, which both have mentioned painting.",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": null,
+      "latency_ms": 8000.804597999377,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What symbols are important to Caroline?",
+      "gold_answer": "Rainbow flag, transgender symbol",
+      "predicted": "",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": null,
+      "latency_ms": 5512.49701299821,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What instruments does Melanie play?",
+      "gold_answer": "clarinet and violin",
+      "predicted": "Based on the conversation history, Melanie plays:\n\n1. **Clarinet** - She mentioned she started playing when she was young and it's been a great way to express herself and relax.\n\n2. **Violin** - She mentioned playing violin as one of her self-care activities to refresh and stay present for her family.",
+      "category": "single-hop",
+      "f1": 0.12,
+      "judge_correct": null,
+      "latency_ms": 5213.843193003413,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What musical artists/bands has Melanie seen?",
+      "gold_answer": "Summer Sounds, Matt Patterson",
+      "predicted": "",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": null,
+      "latency_ms": 6154.155025000364,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What are some changes Caroline has faced during her transition journey?",
+      "gold_answer": "Changes to her body, losing unsupportive friends",
+      "predicted": "",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": null,
+      "latency_ms": 8599.153260998719,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What does Melanie do with her family on hikes?",
+      "gold_answer": "Roast marshmallows, tell stories",
+      "predicted": "Based on the conversation history, Melanie enjoys hiking in the mountains and exploring forests with her family. The conversation mentions that they like \"hiking in the mountains and exploring forests. It's a cool way to connect with nature and each other.\"\n\nHowever, the specific activities they do during the hikes aren't detailed beyond hiking and exploring nature together as a bonding experience.",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": null,
+      "latency_ms": 2252.5220699972124,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What transgender-specific events has Caroline attended?",
+      "gold_answer": "Poetry reading, conference",
+      "predicted": "",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": null,
+      "latency_ms": 7781.785546998435,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What book did Melanie read from Caroline's suggestion?",
+      "gold_answer": "\"Becoming Nicole\"",
+      "predicted": "I don't know. The conversation history doesn't mention Melanie reading a book that Caroline suggested. \n\nHowever, there is a reference to Melanie mentioning \"This book I read last year reminds me to always pursue my dreams,\" but the specific title isn't provided in that part of the conversation.",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": null,
+      "latency_ms": 4258.401166000112,
+      "context_tokens": 15415
+    },
+    {
+      "question": "How many children does Melanie have?",
+      "gold_answer": "3",
+      "predicted": "Based on the conversation history, Melanie has multiple children, but the exact number isn't explicitly stated. The conversation mentions:\n\n- \"my kids\" (plural, multiple times)\n- \"my youngest took her first steps\" (a daughter)\n- \"my son got into an accident\" (a son)\n- \"my 2 younger kids\" (referring to two of them)\n- References to \"the kids\" throughout\n\nThe conversation indicates she has at least 3 children (a youngest daughter who took first steps, at least one son, and references to multiple kids), but the precise total number is not clearly specified in the conversation history.",
+      "category": "single-hop",
+      "f1": 0.024390243902439022,
+      "judge_correct": null,
+      "latency_ms": 7426.170661998185,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Melanie go on a hike after the roadtrip?",
+      "gold_answer": "19 October 2023",
+      "predicted": "I don't have information about Melanie going on a hike after the roadtrip. \n\nIn the conversation history, there is a mention of a road trip where Melanie's son got into an accident at the Grand Canyon. After that incident, the conversation mentions they went camping and the kids enjoyed exploring and playing at a park, but there's no specific mention of a hike happening after the roadtrip.",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": null,
+      "latency_ms": 4675.142400999903,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What items has Melanie bought?",
+      "gold_answer": "Figurines, shoes",
+      "predicted": "",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": null,
+      "latency_ms": 6666.628424998635,
+      "context_tokens": 15415
+    }
+  ]
+}

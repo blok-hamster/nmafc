@@ -24,11 +24,11 @@ aws = [
     "boto3>=1.28",
 ]
 bench = [
-    "deepeval>=0.21",
-    "seaborn>=0.13",
+    "huggingface-hub>=0.20",
     "pandas>=2.0",
-    "matplotlib>=3.8",
-    "datasets>=2.14",
+    "plotly>=5.18",
+    "kaleido>=0.2.1",
+    "rouge-score>=0.1.2",
 ]
 all = ["nmafc[llm,aws,bench]"]
 
@@ -54,6 +54,12 @@ select = ["E", "F", "I", "N", "W"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.pyrefly]
+search_path = ["."]
+
+[tool.pyright]
+extraPaths = ["."]
 
 [tool.mypy]
 python_version = "3.11"

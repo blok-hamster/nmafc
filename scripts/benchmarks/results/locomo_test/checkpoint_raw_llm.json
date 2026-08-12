@@ -1,0 +1,696 @@
+{
+  "arm": "raw_llm",
+  "completed_conversations": 1,
+  "results": [
+    {
+      "question": "When did Caroline go to the LGBTQ support group?",
+      "gold_answer": "7 May 2023",
+      "predicted": "According to the conversation history, Caroline went to an LGBTQ support group yesterday. She mentioned this early in the conversation when she said: \"I went to a LGBTQ support group yesterday and it was so powerful.\"",
+      "category": "temporal",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 2880.7594350000727,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Melanie paint a sunrise?",
+      "gold_answer": "2022",
+      "predicted": "According to the conversation history, Melanie painted a lake sunrise last year. She mentioned this when showing Caroline one of her paintings, saying: \"Yeah, I painted that lake sunrise last year! It's special to me.\"",
+      "category": "temporal",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 2373.020502000145,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What did Caroline research?",
+      "gold_answer": "Adoption agencies",
+      "predicted": "Based on the conversation history, Caroline researched:\n\n1. **Adoption agencies** - She researched adoption agencies and processes to prepare for adopting children. She found an agency that specifically helps LGBTQ+ folks with adoption, which appealed to her because of their inclusivity and support.\n\n2. **Counseling and mental health career options** - She looked into pursuing counseling or mental health work because she wanted to help people who have gone through similar experiences as her, particularly supporting the trans community with their mental health and acceptance.\n\n3. **Career options in general** - Early in their conversations, she mentioned wanting to continue her education and check out career options, which eventually led to her interest in counseling and mental health.",
+      "category": "single-hop",
+      "f1": 0.03508771929824561,
+      "judge_correct": true,
+      "latency_ms": 3991.787724999085,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What is Caroline's identity?",
+      "gold_answer": "Transgender woman",
+      "predicted": "Based on the conversation history, Caroline is a transgender woman. She has been on a transition journey for about three years and is very open about her identity as a trans woman. She is passionate about LGBTQ+ advocacy, uses art as a form of self-expression to explore and celebrate her trans experience, and is actively involved in supporting the LGBTQ+ community through mentoring, volunteering at youth centers, and participating in pride events and advocacy work.",
+      "category": "single-hop",
+      "f1": 0.05633802816901409,
+      "judge_correct": true,
+      "latency_ms": 4297.162997001578,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Melanie run a charity race?",
+      "gold_answer": "The sunday before 25 May 2023",
+      "predicted": "According to the conversation history, Melanie ran a charity race for mental health last Saturday. She mentioned it was really rewarding and made her think about taking care of our minds.",
+      "category": "temporal",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 2677.502243001072,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When is Melanie planning on going camping?",
+      "gold_answer": "June 2023",
+      "predicted": "Based on the conversation history, Melanie hasn't mentioned a specific upcoming camping trip date. However, she has mentioned that:\n\n1. She went camping two weekends ago (in the most recent messages)\n2. Earlier in the conversation, she mentioned planning a camping trip \"next month\" with the kids for summer break\n\nSo while she seems to enjoy regular camping trips with her family, there's no specific confirmed date mentioned in the conversation for her next camping trip.",
+      "category": "temporal",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 3173.193957998592,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What is Caroline's relationship status?",
+      "gold_answer": "Single",
+      "predicted": "Based on the conversation history, Caroline's relationship status is not explicitly stated as currently being in a relationship. \n\nWhat is mentioned:\n- She had a \"tough breakup\" that happened some time ago (she mentioned this when talking about how long she's known her friends - \"4 years, since I moved from my home country\" and how they supported her \"especially after that tough breakup\")\n- She is focused on pursuing counseling/mental health work as a career\n- She is actively working on adoption to become a mom\n- She is deeply involved in LGBTQ community and activism\n\nThere's no indication in the conversation that she is currently in a romantic relationship. Her focus appears to be on her personal growth, career goals, and plans to build a family through adoption.",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": true,
+      "latency_ms": 3833.0310719993577,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Caroline give a speech at a school?",
+      "gold_answer": "The week before 9 June 2023",
+      "predicted": "Based on the conversation history, Caroline gave a speech at a school event last week (relative to that point in the conversation). During her talk, she discussed her transgender journey and encouraged students to get involved in the LGBTQ community. She shared the struggles she had faced and how much she'd developed since coming out three years ago, and the audience responded positively to her message about gender identity and inclusion.",
+      "category": "temporal",
+      "f1": 0.028985507246376812,
+      "judge_correct": false,
+      "latency_ms": 3531.3006560008944,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Caroline meet up with her friends, family, and mentors?",
+      "gold_answer": "The week before 9 June 2023",
+      "predicted": "According to the conversation history, Caroline mentioned meeting up with friends, family, and mentors in a photo she shared. Specifically, she said: \"Here's a pic from when we met up last week!\" \n\nHowever, the exact date isn't specified beyond \"last week.\" This was mentioned when Caroline was talking about her support system and how her friends and family have been there through everything, including her tough breakup. She noted she's known these friends for 4 years since she moved from her home country.",
+      "category": "temporal",
+      "f1": 0.023809523809523808,
+      "judge_correct": false,
+      "latency_ms": 2545.2103070001613,
+      "context_tokens": 15415
+    },
+    {
+      "question": "How long has Caroline had her current group of friends for?",
+      "gold_answer": "4 years",
+      "predicted": "According to the conversation history, Caroline has known her current group of friends for **4 years**, since she moved from her home country (Sweden).\n\nShe mentioned this when she said: \"I've known these friends for 4 years, since I moved from my home country.\"",
+      "category": "temporal",
+      "f1": 0.08888888888888888,
+      "judge_correct": true,
+      "latency_ms": 2206.3511979995383,
+      "context_tokens": 15415
+    },
+    {
+      "question": "Where did Caroline move from 4 years ago?",
+      "gold_answer": "Sweden",
+      "predicted": "Based on the conversation history, Caroline moved from her home country, Sweden, 4 years ago. She mentioned this when talking about her support system: \"I've known these friends for 4 years, since I moved from my home country.\"\n\nShe also mentioned that her grandmother is in Sweden and gave her a special necklace as a gift from her home country.",
+      "category": "single-hop",
+      "f1": 0.034482758620689655,
+      "judge_correct": true,
+      "latency_ms": 5546.515612997609,
+      "context_tokens": 15415
+    },
+    {
+      "question": "How long ago was Caroline's 18th birthday?",
+      "gold_answer": "10 years ago",
+      "predicted": "Based on the conversation history, Caroline mentioned that a friend made her a hand-painted bowl as a gift for her 18th birthday \"ten years ago.\"\n\nSo Caroline's 18th birthday was **10 years ago**.",
+      "category": "temporal",
+      "f1": 0.1875,
+      "judge_correct": true,
+      "latency_ms": 5865.675568998995,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What career path has Caroline decided to persue?",
+      "gold_answer": "counseling or mental health for Transgender people",
+      "predicted": "Based on the conversation history, Caroline has decided to pursue **counseling or mental health work**.\n\nShe became passionate about this path after her own positive experience with mental health support and counseling during her transition. She wants to help other transgender people and those facing similar struggles to accept themselves and support their mental health.\n\nSpecifically, Caroline mentioned:\n- She's interested in working with trans people, helping them accept themselves and supporting their mental health\n- She attended an LGBTQ+ counseling workshop to learn about different therapeutic methods\n- She's been researching counseling and mental health career options\n- She sees counseling and support as crucial because of how much it helped her own journey\n\nCaroline is actively pursuing this goal and continues to be passionate about creating a safe, inviting space for people to grow and heal.",
+      "category": "single-hop",
+      "f1": 0.10144927536231885,
+      "judge_correct": true,
+      "latency_ms": 8360.645518998354,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What activities does Melanie partake in?",
+      "gold_answer": "pottery, camping, painting, swimming",
+      "predicted": "",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 5507.384937998722,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Melanie sign up for a pottery class?",
+      "gold_answer": "2 July 2023",
+      "predicted": "According to the conversation history, Melanie signed up for a pottery class yesterday (relative to when she mentioned it to Caroline). She said: \"Wow, Caroline! I'm getting creative too, just learning the piano. What made you try pottery?\" and then later mentioned \"I just signed up for a pottery class yesterday. It's like therapy for me, letting me express myself and get creative.\"",
+      "category": "temporal",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 6669.479434000095,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When is Caroline going to the transgender conference?",
+      "gold_answer": "July 2023",
+      "predicted": "According to the conversation history, Caroline mentioned she was going to a transgender conference \"this month,\" but no specific date was provided. The conversation doesn't give us the exact timing of when that conference is scheduled to take place.",
+      "category": "temporal",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 3889.855195000564,
+      "context_tokens": 15415
+    },
+    {
+      "question": "Where has Melanie camped?",
+      "gold_answer": "beach, mountains, forest",
+      "predicted": "Based on the conversation history, Melanie has camped in the following places:\n\n1. **Mountains** - She took her kids camping in the mountains last week and they explored nature, roasted marshmallows around the campfire, and went on a hike.\n\n2. **Forest** - She and her family enjoy hiking in the mountains and exploring forests together.\n\n3. **Beach** - She mentioned going camping at the beach with her family, which they love.\n\n4. **Grand Canyon area** - After a road trip where her son got into an accident, she mentioned that the kids enjoyed the Grand Canyon a lot.\n\nMelanie also frequently mentions camping trips as a family tradition where they roast marshmallows, tell stories around the campfire, and enjoy each other's company. One particularly memorable camping trip was when they saw the Perseid meteor shower.",
+      "category": "single-hop",
+      "f1": 0.050420168067226885,
+      "judge_correct": true,
+      "latency_ms": 8908.120128999144,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What do Melanie's kids like?",
+      "gold_answer": "dinosaurs, nature",
+      "predicted": "Based on the conversation history, Melanie's kids like:\n\n1. **The beach** - They had a blast at the beach, with seeing their happy faces being the best part for Melanie\n2. **Camping** - They love camping trips, roasting marshmallows, telling stories around the campfire, and exploring nature\n3. **The Perseid meteor shower** - They made wishes while watching it together\n4. **Concerts** - They enjoyed a Matt Patterson concert where they celebrated one of the daughter's birthdays\n5. **Parks** - They had fun exploring and playing at the park\n6. **Museums** - Specifically the dinosaur exhibit at a museum they visited, where they were excited to learn about animals and see the bones\n7. **Pottery workshops** - They loved getting their hands dirty and making their own pots\n8. **Painting** - They enjoy painting together with nature-inspired themes and creating art\n\nOverall, Melanie's kids seem to enjoy outdoor activities, creative pursuits like art and pottery, spending quality time with family, and learning experiences.",
+      "category": "single-hop",
+      "f1": 0.01388888888888889,
+      "judge_correct": false,
+      "latency_ms": 7885.836582001502,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Melanie go to the museum?",
+      "gold_answer": "5 July 2023",
+      "predicted": "According to the conversation history, Melanie took the kids to the museum yesterday. She mentioned they saw the dinosaur exhibit, which the kids were really excited about.",
+      "category": "temporal",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 3709.9773209993145,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Caroline have a picnic?",
+      "gold_answer": "The week before 6 July 2023",
+      "predicted": "Based on the conversation history, Caroline mentioned having a picnic last week. She shared a photo from it when discussing how her friends and family have been supporting her through her transition. However, the exact date isn't specified beyond \"last week.\"",
+      "category": "temporal",
+      "f1": 0.047619047619047616,
+      "judge_correct": false,
+      "latency_ms": 4388.849335999112,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What books has Melanie read?",
+      "gold_answer": "\"Nothing is Impossible\", \"Charlotte's Web\"",
+      "predicted": "Based on the conversation history, I don't have specific information about books that Melanie has read. \n\nHowever, I do know that Melanie mentioned a book influenced her to pursue her dreams. She said: \"This book I read last year reminds me to always pursue my dreams, just like you are doing!\"\n\nBut the specific title of that book wasn't mentioned in the conversation.\n\nThe only book that was discussed in detail was \"Charlotte's Web,\" which Melanie mentioned as a favorite from her childhood, saying: \"I loved reading 'Charlotte's Web' as a kid. It was so cool seeing how friendship and compassion can make a difference.\"",
+      "category": "single-hop",
+      "f1": 0.0392156862745098,
+      "judge_correct": false,
+      "latency_ms": 8086.269693001668,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What does Melanie do to destress?",
+      "gold_answer": "Running, pottery",
+      "predicted": "",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 7645.655756001361,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Caroline go to the LGBTQ conference?",
+      "gold_answer": "10 July 2023",
+      "predicted": "Based on the conversation history, Caroline went to an LGBTQ conference two days before one of her recent messages. In that message she said: \"I went to an LGBTQ conference two days ago and it was really special.\"\n\nHowever, the exact date is not specified in the conversation. We only know it was two days before that particular conversation turn.\n\nAdditionally, there's another mention where Caroline said she was \"going to a transgender conference this month\" and was \"so excited to meet other people in the community and learn more about advocacy,\" but no specific date was given for that either.",
+      "category": "temporal",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 7784.401862998493,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Melanie read the book \"nothing is impossible\"?",
+      "gold_answer": "2022",
+      "predicted": "I don't know. This information is not available in the conversation history. \n\nThe conversation mentions that Melanie read a book last year that reminds her to always pursue her dreams, but the specific title \"nothing is impossible\" is not mentioned, and no date is given for when she read it.",
+      "category": "temporal",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 6638.0792609998025,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Caroline go to the adoption meeting?",
+      "gold_answer": "The friday before 15 July 2023",
+      "predicted": "According to the conversation history, Caroline went to a council meeting for adoption last Friday. She mentioned it was inspiring and emotional, with many people wanting to create loving homes for children in need, which made her even more determined to adopt.",
+      "category": "temporal",
+      "f1": 0.04444444444444445,
+      "judge_correct": false,
+      "latency_ms": 5529.196472001786,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Melanie go to the pottery workshop?",
+      "gold_answer": "The Friday before 15 July 2023",
+      "predicted": "According to the conversation history, Melanie took her kids to a pottery workshop last Friday. She mentioned that they all made their own pots, and it was fun and therapeutic for them.",
+      "category": "temporal",
+      "f1": 0.05714285714285715,
+      "judge_correct": false,
+      "latency_ms": 4936.968103000254,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Melanie go camping in June?",
+      "gold_answer": "The week before 27 June 2023",
+      "predicted": "I don't have specific information about when in June Melanie went camping. The conversation history mentions multiple camping trips, but none are explicitly dated to June. The most recent camping reference I can find is Melanie mentioning \"two weekends ago\" they went camping with her family, but no specific month or date is provided for that trip.\n\nIf you're looking for a specific camping trip, could you provide more context about which one you're interested in?",
+      "category": "temporal",
+      "f1": 0.02564102564102564,
+      "judge_correct": false,
+      "latency_ms": 7782.429433998914,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What LGBTQ+ events has Caroline participated in?",
+      "gold_answer": "Pride parade, school speech, support group",
+      "predicted": "",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 7174.374067999452,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Caroline go to a pride parade during the summer?",
+      "gold_answer": "The week before 3 July 2023",
+      "predicted": "Based on the conversation history, I don't have a specific date for when Caroline went to a pride parade during the summer. \n\nThe history mentions several pride parades Caroline attended:\n1. One she missed but heard about from Melanie's perspective (when a city held a pride parade)\n2. One she went to last Friday (mentioned multiple times, but without a specific summer date)\n3. One she attended a few weeks ago (where she felt accepted and happy)\n\nHowever, none of these references provide a clear indication of exactly when during the summer this occurred. The conversation doesn't establish a specific summer date for any of the pride parades Caroline attended.",
+      "category": "temporal",
+      "f1": 0.019801980198019802,
+      "judge_correct": false,
+      "latency_ms": 6970.28045299885,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What events has Caroline participated in to help children?",
+      "gold_answer": "Mentoring program, school speech",
+      "predicted": "Based on the conversation history, here are the events Caroline has participated in to help children:\n\n1. **LGBTQ+ Youth Center Volunteering** - Caroline volunteered at an LGBTQ+ youth center where she supported young people facing challenges and shared her own story with them to let them know they're not alone.\n\n2. **Talent Show Organization** - She helped put together a talent show for kids at the youth center, looking forward to seeing them have fun and feel proud of their talents.\n\n3. **LGBTQ+ Mentorship Program** - Caroline joined a mentorship program for LGBTQ youth where she mentors a transgender teen. She's been working with them on building confidence and finding positive strategies, and they attended a Pride event together.\n\n4. **Adoption Journey** - While not yet finalized, Caroline has been actively pursuing adoption to create a loving home for children in need. She's passed adoption agency interviews and attended adoption council meetings, expressing her goal to give children a safe, loving environment and help them experience love and acceptance.\n\nCaroline's motivation for these activities stems from her own experiences with support during her transition and her desire to give back to the community and help others, especially young people, navigate their own journeys.",
+      "category": "single-hop",
+      "f1": 0.010416666666666668,
+      "judge_correct": false,
+      "latency_ms": 7474.077937000402,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Melanie go camping in July?",
+      "gold_answer": "two weekends before 17 July 2023",
+      "predicted": "I don't have information about when Melanie went camping in July. The conversation history shows multiple camping trips mentioned, but none are specifically dated to July. The most recent camping trip mentioned was \"two weekends ago\" from the current conversation, but there's no specific date provided for that or for any July camping trip.\n\nWould you like me to help you find information about other camping trips Melanie mentioned in the conversation?",
+      "category": "temporal",
+      "f1": 0.0810810810810811,
+      "judge_correct": false,
+      "latency_ms": 4520.855171998846,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Caroline join a mentorship program?",
+      "gold_answer": "The weekend before 17 July 2023",
+      "predicted": "According to the conversation history, Caroline joined a mentorship program for LGBTQ youth last weekend (relative to when she mentioned it in a recent conversation). She said: \"Last weekend I joined a mentorship program for LGBTQ youth - it's really rewarding to help the community.\"",
+      "category": "temporal",
+      "f1": 0.045454545454545456,
+      "judge_correct": false,
+      "latency_ms": 6425.8500690011715,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What did Melanie paint recently?",
+      "gold_answer": "sunset",
+      "predicted": "Based on the conversation history, Melanie recently painted a **sunset-inspired piece**. She mentioned painting it last week, and it was inspired by sunsets. The painting features calming colors and has a serene vibe with blue streaks and vibrant colors meant to convey tranquility.\n\nAdditionally, she and her kids just finished another nature-inspired painting together last weekend, which featured bold colors highlighting the beauty of nature and included flowers they found.\n\nMelanie also mentioned doing an abstract painting with blue streaks that portrays peaceful, serene feelings.",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": true,
+      "latency_ms": 6553.052896000736,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What activities has Melanie done with her family?",
+      "gold_answer": "Pottery, painting, camping, museum, swimming, hiking",
+      "predicted": "",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 6144.199923997803,
+      "context_tokens": 15415
+    },
+    {
+      "question": "In what ways is Caroline participating in the LGBTQ community?",
+      "gold_answer": "Joining activist group, going to pride parades, participating in an art show, mentoring program",
+      "predicted": "",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 9138.891805003368,
+      "context_tokens": 15415
+    },
+    {
+      "question": "How many times has Melanie gone to the beach in 2023?",
+      "gold_answer": "2",
+      "predicted": "I don't have enough information to answer this question. The conversation history doesn't include specific dates or a clear timeline that would allow me to determine which beach visits occurred in 2023 versus other years.\n\nFrom the conversation, I can see that Melanie has mentioned:\n- Going to the beach with her kids (usually once or twice a year)\n- A camping trip at the beach\n\nHowever, without explicit dates or a specified year for these events, I cannot accurately count how many times she went to the beach specifically in 2023.",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 7046.999494999909,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Caroline join a new activist group?",
+      "gold_answer": "The Tuesday before 20 July 2023",
+      "predicted": "According to the conversation history, Caroline joined a new LGBTQ activist group called \"Connected LGBTQ Activists\" last Tuesday (from her perspective when she mentioned it). The group is made up of all kinds of people investing in positive changes, with regular meetings, events and campaigns to support each other.",
+      "category": "temporal",
+      "f1": 0.0392156862745098,
+      "judge_correct": false,
+      "latency_ms": 7065.293420000671,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What kind of art does Caroline make?",
+      "gold_answer": "abstract art",
+      "predicted": "Based on the conversation history, Caroline makes several types of art:\n\n1. **Painting** - This is her primary medium. She creates paintings exploring various themes including:\n   - Her transgender journey and identity (like a painting with red and blue colors representing the gender binary)\n   - Trans experiences and self-acceptance (like \"Embracing Identity\")\n   - Landscapes and nature (like a sunset painting inspired by a beach visit)\n   - LGBTQ themes and unity/strength (like her painting for the LGBTQ art show)\n\n2. **Stained glass** - She created a stained glass window for a local church showing her journey as a transgender woman and themes of growth and change.\n\n3. **Self-portraits** - She mentioned creating a recent self-portrait using blue, which she felt was liberated and empowering.\n\n4. **Drawing** - She draws flowers, which is one of her favorites, and creates art inspired by nature.\n\nCaroline uses art as a therapeutic outlet for self-expression, to explore her trans identity, and to help others understand the transgender community. Her art is often centered on themes of acceptance, identity, freedom, and LGBTQ+ advocacy. She's even planning an LGBTQ art show to display her paintings.",
+      "category": "single-hop",
+      "f1": 0.011834319526627219,
+      "judge_correct": false,
+      "latency_ms": 7224.622289999388,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When is Melanie's daughter's birthday?",
+      "gold_answer": "13 August",
+      "predicted": "I don't see a specific date mentioned for Melanie's daughter's birthday in the conversation history. The conversation mentions that Melanie celebrated her daughter's birthday with a concert, but the exact date is not provided.",
+      "category": "temporal",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 7304.335828001058,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Caroline attend a pride parade in August?",
+      "gold_answer": "The Friday before 14 August 2023",
+      "predicted": "I don't know the specific date in August when Caroline attended a pride parade. \n\nThe conversation history mentions Caroline attending several pride parades and pride events, but the exact date in August is not specified. The history references pride parades in general terms (like \"last Friday,\" \"last weekend,\" etc.) but doesn't provide a specific August date for when one occurred.",
+      "category": "temporal",
+      "f1": 0.06779661016949153,
+      "judge_correct": false,
+      "latency_ms": 6143.3259320001525,
+      "context_tokens": 15415
+    },
+    {
+      "question": "Who supports Caroline when she has a negative experience?",
+      "gold_answer": "Her mentors, family, and friends",
+      "predicted": "Based on the conversation history, Caroline has a strong support system that helps her during negative experiences:\n\n1. **Friends and family** - She mentions having friends she's known for 4 years (since moving from Sweden) and family members who have been there through everything, including a tough breakup.\n\n2. **The LGBTQ+ community** - She finds support and acceptance through various LGBTQ+ groups, support groups, and activist communities like \"Connected LGBTQ Activists.\"\n\n3. **Mentors** - She references people she looks up to who have provided invaluable help, especially during her transition.\n\n4. **Melanie (her friend)** - Throughout the conversation, Melanie consistently offers encouragement, celebrates her achievements, and listens to her experiences.\n\nFor example, when Caroline mentioned having a negative experience on a hike with religious conservatives who upset her, she noted: \"It's been so helpful to have people around me who accept and support me, so I know I'll be ok!\" This shows her reliance on her support network during difficult times.\n\nCaroline also emphasizes how crucial this support has been: \"Their love and help have been so important especially after that tough breakup\" and \"I couldn't have done it without them\" - referring to how her friends and family supported her through her transition.",
+      "category": "single-hop",
+      "f1": 0.050761421319796954,
+      "judge_correct": true,
+      "latency_ms": 8703.30462900165,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What types of pottery have Melanie and her kids made?",
+      "gold_answer": "bowls, cup",
+      "predicted": "",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 6348.261301001912,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Caroline and Melanie go to a pride fesetival together?",
+      "gold_answer": "2022",
+      "predicted": "I don't know. Based on the conversation history, I can see that:\n\n- Caroline attended a pride parade last Friday and mentioned it was awesome\n- Melanie attended a pride fest last year with \"the whole gang\"\n\nHowever, there's no indication in the conversation that Caroline and Melanie went to a pride festival **together**. They discuss their individual experiences at pride events, but no shared pride festival outing is mentioned.",
+      "category": "temporal",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 5834.756807998929,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What has Melanie painted?",
+      "gold_answer": "Horse, sunset, sunrise",
+      "predicted": "",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 7900.001972000609,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What are Melanie's pets' names?",
+      "gold_answer": "Oliver, Luna, Bailey",
+      "predicted": "Based on the conversation history, Melanie has two pets:\n\n1. **Luna** - a dog\n2. **Oliver** - a cat\n\nMelanie mentioned these names when Caroline asked what her pets were called, and she noted that they are sweet, playful, and really liven up the house.",
+      "category": "single-hop",
+      "f1": 0.09523809523809523,
+      "judge_correct": false,
+      "latency_ms": 7565.688009999576,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Caroline apply to adoption agencies?",
+      "gold_answer": "The week of 23 August 2023",
+      "predicted": "Based on the conversation history, Caroline applied to adoption agencies early in her adoption journey. She mentioned:\n\n1. **First application**: \"I took the first step towards becoming a mom - I applied to adoption agencies!\" - This was mentioned when she was discussing having a guinea pig named Oscar.\n\n2. **Later in the process**: She mentioned contacting her mentor for adoption advice and being ready to be a mom, and subsequently passed adoption agency interviews \"last Friday.\"\n\nHowever, the exact calendar date of her initial application is not specified in the conversation history. The conversation spans many months/interactions, but specific dates for when she first applied are not provided.",
+      "category": "temporal",
+      "f1": 0.019417475728155335,
+      "judge_correct": false,
+      "latency_ms": 9727.85511300026,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Caroline draw a self-portrait?",
+      "gold_answer": "The week before 23 August 2023",
+      "predicted": "Based on the conversation history, Caroline drew a self-portrait last week. She mentioned: \"Here's a recent self-portrait I made last week.\"\n\nThis was during a conversation where Melanie asked Caroline if she likes to paint, and Caroline shared the self-portrait, describing it as making her feel \"liberated and empowered.\"",
+      "category": "temporal",
+      "f1": 0.04081632653061225,
+      "judge_correct": false,
+      "latency_ms": 6041.805217002548,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What subject have Caroline and Melanie both painted?",
+      "gold_answer": "Sunsets",
+      "predicted": "",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 8395.20961299786,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What symbols are important to Caroline?",
+      "gold_answer": "Rainbow flag, transgender symbol",
+      "predicted": "",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 7765.036172000691,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Caroline encounter people on a hike and have a negative experience?",
+      "gold_answer": "The week before 25 August 2023",
+      "predicted": "Based on the conversation history, Caroline mentioned two hike-related negative experiences:\n\n1. **Early in the conversation**: Caroline had a \"not-so-great experience on a hike\" where she \"ran into a group of religious conservatives who said something that really upset me.\"\n\n2. **Later in the conversation**: Caroline mentioned going \"hiking last week and got into a bad spot with some people. It really bugged me, so I tried to apologize to them.\"\n\nHowever, the conversation history doesn't provide specific dates for these incidents - only that they happened sometime before Caroline mentioned them to Melanie. The first incident is mentioned when Melanie asks if Caroline is doing okay, and Caroline notes it made her think about how much work still needs to be done for LGBTQ rights. The second incident is mentioned later in a separate conversation where Caroline notes she tried to apologize to those people afterward.",
+      "category": "temporal",
+      "f1": 0.02857142857142857,
+      "judge_correct": false,
+      "latency_ms": 8396.010167001805,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Melanie make a plate in pottery class?",
+      "gold_answer": "24 August 2023",
+      "predicted": "According to the conversation history, Melanie made a plate in pottery class yesterday (relative to when she mentioned it). She said: \"Yeah, I made it in pottery class yesterday.\"\n\nHowever, I should note that in the most recent part of the conversation, she mentions making a pottery bowl, not a plate. She said: \"Here it is. Pretty proud of it! It was a great experience\" in reference to a bowl with colors and patterns.\n\nThe exact timeline of when \"yesterday\" was isn't specified in terms of a real date, but based on the conversation flow, it was during one of their recent chats.",
+      "category": "temporal",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 4914.712999998301,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What instruments does Melanie play?",
+      "gold_answer": "clarinet and violin",
+      "predicted": "Based on the conversation history, Melanie plays:\n\n1. **Clarinet** - She mentioned she started playing it when she was young and it's been great for self-expression and relaxation.\n\n2. **Violin** - She mentioned playing violin as one of her self-care activities to refresh herself and help her stay present for her family.",
+      "category": "single-hop",
+      "f1": 0.11538461538461538,
+      "judge_correct": true,
+      "latency_ms": 5529.831633000867,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What musical artists/bands has Melanie seen?",
+      "gold_answer": "Summer Sounds, Matt Patterson",
+      "predicted": "Based on the conversation history, Melanie has seen:\n\n1. **Matt Patterson** - She attended a concert featuring him and described his voice and songs as amazing. This was at her daughter's birthday celebration concert surrounded by music and a warm summer breeze.\n\n2. **Summer Sounds** - A band that plays awesome pop songs. She attended one of their shows and mentioned it was so fun and lively, with everyone dancing and singing.\n\nThose are the specific musical artists/bands mentioned that Melanie has seen perform.",
+      "category": "single-hop",
+      "f1": 0.09876543209876544,
+      "judge_correct": false,
+      "latency_ms": 7063.188125001034,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Melanie go to the park?",
+      "gold_answer": "27 August 2023",
+      "predicted": "Based on the conversation history, Melanie mentioned going to the park with her kids yesterday (relative to when she said it), where they had fun exploring and playing. However, the exact specific date is not mentioned in the conversation - only that it was \"yesterday\" at the time she talked about it.",
+      "category": "temporal",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 6079.420955000387,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When is Caroline's youth center putting on a talent show?",
+      "gold_answer": "September 2023",
+      "predicted": "According to the conversation history, Caroline mentioned that the youth center is putting together a talent show next month (from when she said: \"We're putting together a talent show for the kids next month. I'm looking forward to seeing how much fun everyone has and how proud they'll feel of their talents!\").\n\nHowever, the conversation doesn't specify an exact date - only that it would be happening the following month from when that conversation took place.",
+      "category": "temporal",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 6630.015105998609,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What are some changes Caroline has faced during her transition journey?",
+      "gold_answer": "Changes to her body, losing unsupportive friends",
+      "predicted": "",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 10445.136528000148,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What does Melanie do with her family on hikes?",
+      "gold_answer": "Roast marshmallows, tell stories",
+      "predicted": "Based on the conversation history, Melanie enjoys hiking in the mountains and exploring forests with her family. It's described as \"a cool way to connect with nature and each other.\" \n\nThe conversations mention that they do family camping trips where they hike together, and they appreciate exploring nature and spending quality time as a family during these outdoor activities. However, the specific details about what activities they do during the hikes aren't explicitly stated beyond just exploring and connecting with nature.",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 5411.883676002617,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Caroline go biking with friends?",
+      "gold_answer": "The weekend before 13 September 2023",
+      "predicted": "According to the conversation history, Caroline went biking with friends last weekend. She mentioned: \"I had a wicked day out with the gang last weekend - we went biking and saw some pretty cool stuff. It was so refreshing, and the pic I'm sending is just stunning, eh?\"\n\nHowever, the exact date isn't specified\u2014she only refers to it as \"last weekend.\"",
+      "category": "temporal",
+      "f1": 0.03333333333333333,
+      "judge_correct": false,
+      "latency_ms": 7095.5862190021435,
+      "context_tokens": 15415
+    },
+    {
+      "question": "How long has Melanie been practicing art?",
+      "gold_answer": "Since 2016",
+      "predicted": "According to the conversation history, Melanie mentioned that she's been into art for **seven years**. She said: \"Seven years now, and I've finally found my real muses: painting and pottery.\"",
+      "category": "temporal",
+      "f1": 0.0,
+      "judge_correct": true,
+      "latency_ms": 5001.935271000548,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What transgender-specific events has Caroline attended?",
+      "gold_answer": "Poetry reading, conference",
+      "predicted": "",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 5733.3473340004275,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What book did Melanie read from Caroline's suggestion?",
+      "gold_answer": "\"Becoming Nicole\"",
+      "predicted": "I don't see any book that Melanie read from Caroline's suggestion in the conversation history. \n\nCaroline mentioned loving the book \"Becoming Nicole\" by Amy Ellis Nutt and recommended it, but there's no indication that Melanie actually read it. Melanie did mention reading a book that reminded her to pursue her dreams, but she didn't specify which book, and it doesn't appear to have been Caroline's recommendation.",
+      "category": "single-hop",
+      "f1": 0.06153846153846154,
+      "judge_correct": false,
+      "latency_ms": 5734.154101002787,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Melanie's friend adopt a child?",
+      "gold_answer": "2022",
+      "predicted": "According to the conversation history, Melanie mentioned that \"a buddy of mine adopted last year\" when Caroline asked if Melanie had any experience with adoption or knew anyone who had gone through the process. However, the exact timing isn't specified beyond \"last year\" relative to that point in the conversation.",
+      "category": "temporal",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 7372.691319000296,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Melanie get hurt?",
+      "gold_answer": "September 2023",
+      "predicted": "According to the conversation history, Melanie got hurt last month. She mentioned it when she said: \"BTW, recently I had a setback. Last month I got hurt and had to take a break from pottery, which I use for self-expression and peace.\"\n\nShe had to take a break from pottery because of the injury, but she was doing okay and kept busy by reading and painting during her recovery.",
+      "category": "temporal",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 7313.379694001924,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Melanie's family go on a roadtrip?",
+      "gold_answer": "The weekend before 20 October 2023",
+      "predicted": "According to the conversation history, Melanie's family went on a road trip last weekend before one of their later conversations. During that trip, Melanie's son got into an accident, which was scary, but fortunately he was okay. After the accident, the family visited the Grand Canyon, which the kids really enjoyed.\n\nHowever, the exact date isn't specified in the conversation - it's just referred to as \"last weekend\" relative to when Melanie was telling Caroline about it.",
+      "category": "temporal",
+      "f1": 0.05555555555555556,
+      "judge_correct": false,
+      "latency_ms": 5465.286975999334,
+      "context_tokens": 15415
+    },
+    {
+      "question": "How many children does Melanie have?",
+      "gold_answer": "3",
+      "predicted": "Based on the conversation history, Melanie has multiple children, but the exact number isn't explicitly stated as a single figure. However, the conversation mentions:\n\n- She has \"kids\" (plural) and takes them on various outings\n- She specifically mentions a \"youngest\" who took her first steps\n- She mentions a \"daughter\" whose birthday she celebrated at a concert\n- She references a \"son\" who was in a car accident during a road trip\n- She mentions \"2 younger kids\" who love nature\n\nFrom these references, it appears Melanie has **at least 3 children** (a daughter, a son, and at least one younger child), but the exact total number isn't precisely defined in the conversation.",
+      "category": "single-hop",
+      "f1": 0.020833333333333332,
+      "judge_correct": false,
+      "latency_ms": 7270.845606002695,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Melanie go on a hike after the roadtrip?",
+      "gold_answer": "19 October 2023",
+      "predicted": "I don't have that information. The conversation history doesn't specify when Melanie went on a hike after the roadtrip. \n\nWhat I do know is that after the roadtrip where Melanie's son got into an accident, she mentioned taking the kids to the Grand Canyon and they \"enjoyed the Grand Canyon a lot.\" Later, she mentions going camping with her family and enjoying nature/hiking in general as an activity they do together, but there's no specific date given for a hike that occurred after the roadtrip.",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 5428.929199999402,
+      "context_tokens": 15415
+    },
+    {
+      "question": "What items has Melanie bought?",
+      "gold_answer": "Figurines, shoes",
+      "predicted": "",
+      "category": "single-hop",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 5221.170993998385,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Caroline pass the adoption interview?",
+      "gold_answer": "The Friday before 22 October 2023",
+      "predicted": "According to the conversation history, Caroline passed the adoption agency interviews last Friday (from when she mentioned it in a recent conversation). She expressed excitement about this achievement, saying \"I passed the adoption agency interviews last Friday! I'm so excited and thankful. This is a big move towards my goal of having a family.\"",
+      "category": "temporal",
+      "f1": 0.03773584905660377,
+      "judge_correct": false,
+      "latency_ms": 7374.571838998236,
+      "context_tokens": 15415
+    },
+    {
+      "question": "When did Melanie buy the figurines?",
+      "gold_answer": "21 October 2023",
+      "predicted": "According to the conversation history, Melanie bought the figurines yesterday. She mentioned: \"Congrats, Caroline! Adoption sounds awesome. I'm so happy for you. These figurines I bought yesterday remind me of family love.\"\n\nThis was when Caroline told Melanie about passing the adoption agency interviews.",
+      "category": "temporal",
+      "f1": 0.0,
+      "judge_correct": false,
+      "latency_ms": 6428.909150999971,
+      "context_tokens": 15415
+    }
+  ]
+}

@@ -48,24 +48,29 @@ class AzureOpenAIProvider(LLMProvider):
         messages: list[dict],
         system_prompt: str,
     ) -> tuple[str, list[MemoryStateUpdate]]:
+        from typing import Any, cast
+
         full_messages = [{"role": "system", "content": system_prompt}, *messages]
 
         response = await self._client.chat.completions.create(
             model=self._deployment,
-            messages=full_messages,
-            tools=[MEMORY_TOOL_SCHEMA],
+            messages=cast(Any, full_messages),
+            tools=cast(Any, [MEMORY_TOOL_SCHEMA]),
             tool_choice="auto",
         )
 
         message = response.choices[0].message
-        response_text = message.content or ""
+        response_text: str = message.content or ""
         updates: list[MemoryStateUpdate] = []
 
         if message.tool_calls:
             for tool_call in message.tool_calls:
-                if tool_call.function.name == MEMORY_TOOL_NAME:
+                fn = getattr(tool_call, "function", None)
+                if fn is None:
+                    continue
+                if fn.name == MEMORY_TOOL_NAME:
                     try:
-                        args = json.loads(tool_call.function.arguments)
+                        args = json.loads(fn.arguments)
                         payload = UnifiedMemoryPayload(**args)
                         updates.extend(payload.updates)
                     except (json.JSONDecodeError, ValueError):

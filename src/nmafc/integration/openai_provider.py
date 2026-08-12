@@ -80,7 +80,7 @@ class OpenAIProvider(LLMProvider):
             {"role": "system", "content": system_prompt}, *messages
         ]
 
-        response = None
+        response: Any = None
         for attempt in range(10):
             try:
                 response = await self._client.chat.completions.create(
@@ -93,20 +93,23 @@ class OpenAIProvider(LLMProvider):
             except Exception as exc:
                 if attempt == 9:
                     raise exc
-                # Exponential backoff for HTTP 429 Rate Limits
                 await asyncio.sleep(min(30.0, 1.5 * (2.0 ** attempt)))
 
+        if response is None:
+            return "", []
+
         message = response.choices[0].message
-        response_text = message.content or ""
+        response_text: str = message.content or ""
         updates: list[MemoryStateUpdate] = []
 
         if message.tool_calls:
             for tool_call in message.tool_calls:
-                if not hasattr(tool_call, "function") or tool_call.function is None:
+                fn = getattr(tool_call, "function", None)
+                if fn is None:
                     continue
-                if tool_call.function.name == MEMORY_TOOL_NAME:
+                if fn.name == MEMORY_TOOL_NAME:
                     try:
-                        args = json.loads(tool_call.function.arguments)
+                        args = json.loads(fn.arguments)
                         payload = UnifiedMemoryPayload(**args)
                         updates.extend(payload.updates)
                     except (json.JSONDecodeError, ValueError):

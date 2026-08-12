@@ -101,7 +101,7 @@ class QueryRouter:
         # Apply Long-Term Potentiation (LTP) Reinforcement to retrieved records
         final_records: list[MemoryRecord] = []
         for rec in active_records:
-            if rec.weight <= self._config.gamma:
+            if rec.weight < self._config.w_prune:
                 continue
 
             final_records.append(rec)
