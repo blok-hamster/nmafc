@@ -127,6 +127,55 @@ class TestUpdateReinforcement:
         assert updated.weight == 1.0
 
 
+class TestApplyReinforcements:
+    def test_batch_matches_sequential_loop(self, hot: HotStorage):
+        """The batched path must be indistinguishable from the per-record loop.
+
+        Retrieval reinforces every record Spreading Activation surfaces, so this
+        runs on the hot path for every question; a divergence here would silently
+        corrupt weights rather than fail loudly.
+        """
+        records = [
+            make_record(entity=f"e{i}", consolidation_index=i, last_reinforced_turn=1)
+            for i in range(5)
+        ]
+        for i, rec in enumerate(records):
+            hot.upsert(rec, make_embedding(0.1 + i * 0.05))
+
+        updates = [(rec.id, i + 10) for i, rec in enumerate(records)]
+        hot.apply_reinforcements(updates, turn=42)
+
+        for rec, (_, new_k) in zip(records, updates):
+            got = hot.get_record(rec.id)
+            assert got is not None
+            assert got.consolidation_index == new_k
+            assert got.last_reinforced_turn == 42
+            assert got.weight == 1.0
+
+    def test_leaves_untouched_records_alone(self, hot: HotStorage):
+        target = make_record(entity="target", consolidation_index=0)
+        other = make_record(entity="other", consolidation_index=7, weight=0.4)
+        hot.upsert(target, make_embedding(0.1))
+        hot.upsert(other, make_embedding(0.9))
+
+        hot.apply_reinforcements([(target.id, 3)], turn=20)
+
+        untouched = hot.get_record(other.id)
+        assert untouched is not None
+        assert untouched.consolidation_index == 7
+        assert abs(untouched.weight - 0.4) < 0.01
+        assert untouched.last_reinforced_turn == 1
+
+    def test_empty_updates_is_a_noop(self, hot: HotStorage):
+        record = make_record(consolidation_index=2)
+        hot.upsert(record, make_embedding())
+        hot.apply_reinforcements([], turn=99)
+        got = hot.get_record(record.id)
+        assert got is not None
+        assert got.consolidation_index == 2
+        assert got.last_reinforced_turn == 1
+
+
 class TestGetAllMutable:
     def test_excludes_core_anchors(self, hot: HotStorage):
         hot.upsert(

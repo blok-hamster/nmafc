@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import Any, cast
 
 from nmafc.integration.base import EmbeddingProvider, LLMProvider
@@ -70,6 +71,10 @@ class OpenAIProvider(LLMProvider):
 
         self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=90.0)
         self._model = model
+        # Unset by default, so normal use keeps the provider's own sampling.
+        # Benchmarks set NMAFC_LLM_TEMPERATURE=0 to make runs reproducible.
+        temp = os.environ.get("NMAFC_LLM_TEMPERATURE")
+        self._temperature = float(temp) if temp not in (None, "") else None
 
     async def chat_with_extraction(
         self,
@@ -83,11 +88,16 @@ class OpenAIProvider(LLMProvider):
         response: Any = None
         for attempt in range(10):
             try:
+                extra: dict[str, Any] = {}
+                if self._temperature is not None:
+                    extra["temperature"] = self._temperature
+
                 response = await self._client.chat.completions.create(
                     model=self._model,
                     messages=cast(Any, full_messages),
                     tools=cast(Any, [MEMORY_TOOL_SCHEMA]),
                     tool_choice="auto",
+                    **extra,
                 )
                 break
             except Exception as exc:

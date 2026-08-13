@@ -19,6 +19,7 @@ import argparse
 import asyncio
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -28,6 +29,14 @@ try:
 except ImportError:
     pass
 
+# Windows terminals default to cp1252, which cannot encode the box-drawing
+# characters in the progress output (nor much of the dataset text). A run that
+# dies hours in on a print() is not an acceptable failure mode.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from nmafc.integration.factory import (
     create_embedding_provider,
     create_llm_provider,
@@ -35,6 +44,8 @@ from nmafc.integration.factory import (
 
 from .arms.base import BenchmarkArm
 from .arms.neuromorphic import NeuromorphicArm
+from .arms.neuromorphic_tuned import NeuromorphicTunedArm
+from .arms.rag import RagArm
 from .arms.raw_llm import RawLLMArm
 from .arms.stateful_nodecay import StatefulNoDecayArm
 from .datasets.locomo_loader import (
@@ -44,15 +55,20 @@ from .datasets.locomo_loader import (
     load_locomo,
 )
 from .evaluation.f1_score import compute_f1
-from .evaluation.llm_judge import judge_answer
+from .evaluation.llm_judge import judge_batch
 from .evaluation.metrics import BenchmarkResult
+from .resilience import (
+    RateLimiter,
+    RetryingEmbeddingProvider,
+    RetryingLLMProvider,
+)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run LoCoMo benchmark suite")
     parser.add_argument(
         "--arms",
-        default="raw,stateful,neuromorphic",
+        default="raw,rag,neuromorphic,neuromorphic_tuned",
         help="Comma-separated arm names to evaluate",
     )
     parser.add_argument(
@@ -78,8 +94,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--judge",
-        default=None,
-        help="Judge provider string (default: same as --provider)",
+        default=os.environ.get("NMAFC_BENCH_JUDGE"),
+        help=(
+            "Judge provider string (env: NMAFC_BENCH_JUDGE). Defaults to "
+            "--provider, which makes the answering model grade its own output; "
+            "prefer a different model family so the judge is independent of "
+            "every arm."
+        ),
     )
     parser.add_argument(
         "--embedding",
@@ -96,7 +117,94 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Resume from checkpoint file",
     )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=int(os.environ.get("NMAFC_BENCH_CONCURRENCY", "8")),
+        help=(
+            "Conversations evaluated in parallel. Measured quota is 500k TPM / "
+            "500 RPM, which at observed latency saturates near 9; higher values "
+            "mostly produce 429s."
+        ),
+    )
+    parser.add_argument(
+        "--judge-concurrency",
+        type=int,
+        default=int(os.environ.get("NMAFC_BENCH_JUDGE_CONCURRENCY", "12")),
+        help="Parallel judge calls (judging runs as a separate phase)",
+    )
+    parser.add_argument(
+        "--max-questions",
+        type=int,
+        default=None,
+        help="Cap questions per conversation (pilot runs only; omit for the full set)",
+    )
     return parser.parse_args()
+
+
+def _write_checkpoint(
+    output_dir: Path, arm_name: str, by_conversation: dict[str, list[dict]]
+) -> None:
+    """Persist per-conversation results so a killed run can resume."""
+    path = output_dir / f"checkpoint_{arm_name}.json"
+    payload = {
+        "arm": arm_name,
+        "completed_conversations": len(by_conversation),
+        "by_conversation": by_conversation,
+    }
+    tmp = path.with_suffix(".json.tmp")
+    with open(tmp, "w") as f:
+        json.dump(payload, f, indent=2)
+    tmp.replace(path)  # atomic, so a crash mid-write cannot corrupt the file
+
+
+def _load_checkpoints(output_dir: Path, arm_names: list[str]) -> dict[str, dict]:
+    """Read prior checkpoints so completed conversations are not re-run."""
+    completed: dict[str, dict] = {}
+    for name in arm_names:
+        arm_label = {"raw": "raw_llm", "stateful": "stateful_nodecay"}.get(name, name)
+        path = output_dir / f"checkpoint_{arm_label}.json"
+        if not path.exists():
+            continue
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            completed[arm_label] = data.get("by_conversation", {})
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"  WARNING: ignoring unreadable checkpoint {path.name}: {exc}")
+    return completed
+
+
+def make_arm(name: str, llm_provider, embedding_provider) -> BenchmarkArm | None:
+    """Build one arm instance. Each parallel worker needs its own.
+
+    Arms hold live memory state and call reset() between conversations, so a
+    single shared instance cannot be evaluated on two conversations at once.
+    """
+    if name == "raw":
+        return RawLLMArm(llm_provider=llm_provider)
+    if name == "rag":
+        return RagArm(
+            llm_provider=llm_provider,
+            embedding_provider=embedding_provider,
+        )
+    if name == "stateful":
+        return StatefulNoDecayArm(
+            llm_provider=llm_provider,
+            embedding_provider=embedding_provider,
+        )
+    if name == "neuromorphic":
+        return NeuromorphicArm(
+            llm_provider=llm_provider,
+            embedding_provider=embedding_provider,
+        )
+    if name == "neuromorphic_tuned":
+        return NeuromorphicTunedArm(
+            llm_provider=llm_provider,
+            embedding_provider=embedding_provider,
+        )
+    print(f"WARNING: Unknown arm '{name}', skipping")
+    return None
 
 
 def create_arms(
@@ -105,33 +213,43 @@ def create_arms(
     embedding_provider,
 ) -> list[BenchmarkArm]:
     """Instantiate requested benchmark arms."""
-    arms: list[BenchmarkArm] = []
-    for name in arm_names:
-        if name == "raw":
-            arms.append(RawLLMArm(llm_provider=llm_provider))
-        elif name == "stateful":
-            arms.append(StatefulNoDecayArm(
-                llm_provider=llm_provider,
-                embedding_provider=embedding_provider,
-            ))
-        elif name == "neuromorphic":
-            arms.append(NeuromorphicArm(
-                llm_provider=llm_provider,
-                embedding_provider=embedding_provider,
-            ))
-        else:
-            print(f"WARNING: Unknown arm '{name}', skipping")
-    return arms
+    arms = [make_arm(n, llm_provider, embedding_provider) for n in arm_names]
+    return [a for a in arms if a is not None]
+
+
+def merge_metrics(target: BenchmarkArm, workers: list[BenchmarkArm]) -> None:
+    """Fold per-worker metrics back into one arm-level view."""
+    for w in workers:
+        target.metrics._latencies.extend(w.metrics._latencies)
+        target.metrics._prompt_tokens.extend(w.metrics._prompt_tokens)
+        target.metrics._completion_tokens.extend(w.metrics._completion_tokens)
+        target.metrics._context_tokens.extend(w.metrics._context_tokens)
+        target.metrics.hot_storage_records += w.metrics.hot_storage_records
+        target.metrics.cold_storage_events += w.metrics.cold_storage_events
+    # Storage counts are per-conversation; report the average footprint rather
+    # than a sum across every conversation the worker happened to handle.
+    n = max(1, len(workers))
+    target.metrics.hot_storage_records //= n
+    target.metrics.cold_storage_events //= n
 
 
 async def evaluate_arm_on_conversation(
     arm: BenchmarkArm,
     conv: LoCoMoConversation,
     categories: list[int] | None,
-    judge_provider,
-    skip_judge: bool,
+    max_questions: int | None = None,
 ) -> list[dict]:
-    """Run one arm on one conversation, return per-question results."""
+    """Run one arm on one conversation, return per-question results.
+
+    Questions stay sequential within a conversation on purpose: retrieval
+    reinforces memory (LTP) for the stateful arms, so answering concurrently
+    against one arm instance would let questions interleave and perturb each
+    other's state. Parallelism comes from running conversations side by side,
+    each on its own arm instance.
+
+    Judging is deliberately not done here — it runs as a separate batched
+    phase so judge calls can be parallelized independently of answering.
+    """
     arm.reset()
 
     # Ingest all sessions
@@ -142,6 +260,8 @@ async def evaluate_arm_on_conversation(
     qa_pairs = conv.qa_pairs
     if categories:
         qa_pairs = [qa for qa in qa_pairs if qa.category in categories]
+    if max_questions is not None:
+        qa_pairs = qa_pairs[:max_questions]
 
     for i, qa in enumerate(qa_pairs):
         try:
@@ -159,34 +279,46 @@ async def evaluate_arm_on_conversation(
             })
             continue
 
-        f1 = compute_f1(response.answer, qa.answer)
-
-        judge_correct = None
-        if not skip_judge and judge_provider:
-            try:
-                judge_result = await judge_answer(
-                    question=qa.question,
-                    predicted=response.answer,
-                    gold_answer=qa.answer,
-                    judge_provider=judge_provider,
-                )
-                judge_correct = judge_result.correct
-            except Exception:
-                judge_correct = None
-
         results.append({
             "question": qa.question,
             "gold_answer": qa.answer,
             "predicted": response.answer,
             "category": qa.category_name,
-            "f1": f1,
-            "judge_correct": judge_correct,
+            "f1": compute_f1(response.answer, qa.answer),
+            "judge_correct": None,
             "latency_ms": response.latency_ms,
             "context_tokens": response.context_tokens,
         })
 
     arm.update_storage_metrics()
     return results
+
+
+async def run_judge_phase(
+    results: list[dict],
+    judge_provider,
+    concurrency: int,
+) -> None:
+    """Judge every answered question in parallel, updating rows in place."""
+    scorable = [r for r in results if not r.get("error")]
+    if not scorable:
+        return
+
+    print(f"    judging {len(scorable)} answers (concurrency {concurrency})...")
+    verdicts = await judge_batch(
+        items=[
+            {
+                "question": r["question"],
+                "predicted": r["predicted"],
+                "gold_answer": r["gold_answer"],
+            }
+            for r in scorable
+        ],
+        judge_provider=judge_provider,
+        concurrency=concurrency,
+    )
+    for row, verdict in zip(scorable, verdicts):
+        row["judge_correct"] = verdict.correct if verdict is not None else None
 
 
 async def run_benchmark(args: argparse.Namespace) -> None:
@@ -216,63 +348,122 @@ async def run_benchmark(args: argparse.Namespace) -> None:
     print("\n[2/4] Initializing providers...")
     print(f"  LLM: {args.provider}")
     print(f"  Embedding: {args.embedding}")
-    llm_provider = create_llm_provider(args.provider)
-    embedding_provider = create_embedding_provider(args.embedding)
+    # One limiter shared by every arm and by the judge: the quota is
+    # per-deployment, so concurrent arms draw from the same bucket.
+    limiter = RateLimiter()
+    llm_provider = RetryingLLMProvider(create_llm_provider(args.provider), limiter)
+    embedding_provider = RetryingEmbeddingProvider(
+        create_embedding_provider(args.embedding),
+        limiter=None if args.embedding.startswith(("ollama/", "fastembed/")) else limiter,
+    )
+    print(f"  Concurrency: {args.concurrency} conversations, "
+          f"{args.judge_concurrency} judges")
 
     judge_provider = None
     if not args.skip_judge:
         judge_str = args.judge or args.provider
         print(f"  Judge: {judge_str}")
-        judge_provider = create_llm_provider(judge_str)
+        if judge_str == args.provider:
+            print("  WARNING: judge and answering model are identical — the model "
+                  "is grading its own output. Set NMAFC_BENCH_JUDGE to a "
+                  "different model family for an independent judge.")
+        # A judge on a different deployment has its own quota, so it must not
+        # queue behind the answering model's limiter; sharing one bucket across
+        # two providers throttles calls that were never rate-limited.
+        judge_limiter = limiter if judge_str == args.provider else RateLimiter()
+        judge_provider = RetryingLLMProvider(
+            create_llm_provider(judge_str), judge_limiter
+        )
 
     # Create arms
     arm_names = [n.strip() for n in args.arms.split(",")]
     print(f"\n[3/4] Arms: {arm_names}")
-    arms = create_arms(arm_names, llm_provider, embedding_provider)
 
     # Run evaluation
     print("\n[4/4] Running evaluation...")
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    completed = _load_checkpoints(output_dir, arm_names) if args.checkpoint else {}
+
     all_results: dict[str, BenchmarkResult] = {}
 
-    for arm in arms:
+    for arm_name in arm_names:
+        template = make_arm(arm_name, llm_provider, embedding_provider)
+        if template is None:
+            continue
+
         print(f"\n{'─' * 50}")
-        print(f"  ARM: {arm.name}")
+        print(f"  ARM: {template.name}")
         print(f"{'─' * 50}")
 
-        all_question_results: list[dict] = []
+        done_conversations = completed.get(template.name, {})
+        pending = [c for c in conversations if c.sample_id not in done_conversations]
+        all_question_results = [
+            row for c in conversations if c.sample_id in done_conversations
+            for row in done_conversations[c.sample_id]
+        ]
+        if all_question_results:
+            print(f"  resuming: {len(done_conversations)} conversations already "
+                  f"complete, {len(pending)} to go")
 
-        for ci, conv in enumerate(conversations):
-            qa_count = len(conv.qa_pairs)
-            if categories:
-                qa_count = len([q for q in conv.qa_pairs if q.category in categories])
-            print(f"  Conv {ci+1}/{len(conversations)} ({conv.sample_id}): "
-                  f"{conv.num_sessions} sessions, {qa_count} QA pairs")
+        # One arm instance per worker slot, reused across conversations.
+        n_workers = max(1, min(args.concurrency, len(pending)))
+        workers = [
+            make_arm(arm_name, llm_provider, embedding_provider)
+            for _ in range(n_workers)
+        ]
+        queue: asyncio.Queue = asyncio.Queue()
+        for ci, conv in enumerate(pending):
+            queue.put_nowait((ci, conv))
 
-            results = await evaluate_arm_on_conversation(
-                arm=arm,
-                conv=conv,
-                categories=categories,
-                judge_provider=judge_provider,
-                skip_judge=args.skip_judge,
+        results_lock = asyncio.Lock()
+        progress = {"done": 0}
+
+        async def worker(slot: int) -> None:
+            arm = workers[slot]
+            while True:
+                try:
+                    ci, conv = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+                try:
+                    rows = await evaluate_arm_on_conversation(
+                        arm=arm, conv=conv, categories=categories,
+                        max_questions=args.max_questions,
+                    )
+                except Exception as exc:  # noqa: BLE001 - one bad conversation
+                    print(f"    ERROR conversation {conv.sample_id}: {exc}")
+                    rows = []
+
+                async with results_lock:
+                    all_question_results.extend(rows)
+                    done_conversations[conv.sample_id] = rows
+                    progress["done"] += 1
+                    print(f"  [{template.name}] conv {progress['done']}/{len(pending)} "
+                          f"({conv.sample_id}) — {len(rows)} answered")
+                    _write_checkpoint(output_dir, template.name, done_conversations)
+
+        start_arm = time.perf_counter()
+        await asyncio.gather(*(worker(i) for i in range(n_workers)))
+        print(f"  answering finished in {(time.perf_counter() - start_arm) / 60:.1f} min")
+
+        if not args.skip_judge and judge_provider:
+            await run_judge_phase(
+                all_question_results, judge_provider, args.judge_concurrency
             )
-            all_question_results.extend(results)
+            # Judge verdicts were written into the same row objects the
+            # checkpoint holds, so re-dump to persist them.
+            _write_checkpoint(output_dir, template.name, done_conversations)
 
-            # Checkpoint after each conversation
-            checkpoint = {
-                "arm": arm.name,
-                "completed_conversations": ci + 1,
-                "results": all_question_results,
-            }
-            checkpoint_path = output_dir / f"checkpoint_{arm.name}.json"
-            with open(checkpoint_path, "w") as f:
-                json.dump(checkpoint, f, indent=2)
+        merge_metrics(template, workers)
 
         # Aggregate results
-        benchmark_result = _aggregate_results(arm, all_question_results)
-        all_results[arm.name] = benchmark_result
+        benchmark_result = _aggregate_results(template, all_question_results)
+        all_results[template.name] = benchmark_result
+
+        if isinstance(llm_provider, RetryingLLMProvider):
+            print(f"  api: {llm_provider.stats()} | limiter: {limiter.stats()}")
 
         # Print summary for this arm
         _print_arm_summary(benchmark_result)

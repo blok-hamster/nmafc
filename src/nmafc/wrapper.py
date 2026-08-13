@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from nmafc.engine.consolidation import MemoryConsolidator
@@ -12,6 +13,10 @@ from nmafc.schemas.memory import DecayConfig, MemoryRecord, MemoryStateUpdate, U
 from nmafc.storage.cold_base import ColdStorageBase
 from nmafc.storage.config import NMafcConfig
 from nmafc.storage.hot import HotStorage
+
+# Seconds to wait on the embedding-dimension probe before falling back to the
+# configured dimension. Bounded because the probe can block indefinitely.
+EMBED_PROBE_TIMEOUT = float(os.environ.get("NMAFC_EMBED_PROBE_TIMEOUT", "30"))
 
 
 class NeuromorphicMemory:
@@ -32,20 +37,36 @@ class NeuromorphicMemory:
         if config is None:
             config = NMafcConfig.from_env_or_toml(config_path)
 
-        # Auto-detect embedding dimension if using default or un-synced config
-        try:
-            import asyncio
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    sample_vec = pool.submit(asyncio.run, embedding_provider.embed_single("test")).result()
-            else:
-                sample_vec = asyncio.run(embedding_provider.embed_single("test"))
-            if sample_vec and len(sample_vec) > 0:
-                config.storage.embedding_dim = len(sample_vec)
-        except Exception:
-            pass
+        # Auto-detect embedding dimension if using default or un-synced config.
+        #
+        # Set NMAFC_EMBEDDING_DIM to skip the probe entirely. Prefer that when
+        # constructing instances concurrently: the probe below runs the async
+        # provider on a *second* event loop, and if that provider's HTTP client
+        # was already used on the calling loop its connection pool is bound
+        # there, so the probe blocks until the timeout expires.
+        if not os.environ.get("NMAFC_EMBEDDING_DIM"):
+            try:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    import concurrent.futures
+                    # Not a `with` block: its __exit__ shuts the pool down with
+                    # wait=True, which would re-block for exactly as long as the
+                    # timeout was meant to avoid.
+                    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                    try:
+                        sample_vec = pool.submit(
+                            asyncio.run, embedding_provider.embed_single("test")
+                        ).result(timeout=EMBED_PROBE_TIMEOUT)
+                    finally:
+                        pool.shutdown(wait=False)
+                else:
+                    sample_vec = asyncio.run(embedding_provider.embed_single("test"))
+                if sample_vec and len(sample_vec) > 0:
+                    config.storage.embedding_dim = len(sample_vec)
+            except Exception:
+                # Falls back to the configured dimension rather than hanging.
+                pass
 
         self._config = config
         self._decay_config = config.decay
@@ -191,8 +212,7 @@ class NeuromorphicMemory:
         """Apply decay to all mutable records in Hot RAM."""
         mutable = self._hot.get_all_mutable()
         weight_updates = decay_all(mutable, self._current_turn, self._decay_config)
-        for record_id, new_weight in weight_updates:
-            self._hot.update_weight(record_id, new_weight)
+        self._hot.apply_weight_updates(weight_updates)
 
     async def rollback(self, to_turn: int) -> int:
         """Rebuild Hot RAM state from Cold ROM up to the specified turn."""

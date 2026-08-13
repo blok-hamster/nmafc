@@ -134,6 +134,38 @@ class HotStorage:
         self.delete(record_id)
         self._table.add([row])
 
+    def apply_weight_updates(self, updates: list[tuple[str, float]]) -> None:
+        """Apply many weight changes in a single delete + add.
+
+        Semantically identical to calling update_weight() in a loop, but the
+        per-record version costs a scan, a delete and an add *each*. The decay
+        pass rewrites every mutable record every turn, so that made per-turn
+        cost grow linearly with stored memories — quadratic over a
+        conversation, and the dominant cost of ingestion.
+        """
+        if not updates:
+            return
+
+        weights = dict(updates)  # last write wins, as in the sequential loop
+        quoted = ", ".join(f"'{record_id}'" for record_id in weights)
+        rows = self._table.search().where(f"id IN ({quoted})").limit(10000).to_list()
+        if not rows:
+            return
+
+        for row in rows:
+            row.pop("_distance", None)
+            row["weight"] = weights[row["id"]]
+
+        self._table.delete(f"id IN ({quoted})")
+        self._table.add(rows)
+
+    def delete_many(self, record_ids: list[str]) -> None:
+        """Delete several records in one predicate instead of one call each."""
+        if not record_ids:
+            return
+        quoted = ", ".join(f"'{record_id}'" for record_id in set(record_ids))
+        self._table.delete(f"id IN ({quoted})")
+
     def update_reinforcement(self, record_id: str, new_k: int, turn: int) -> None:
         results = self._table.search().where(f"id = '{record_id}'").limit(1).to_list()
         if not results:
@@ -145,6 +177,35 @@ class HotStorage:
         row.pop("_distance", None)
         self.delete(record_id)
         self._table.add([row])
+
+    def apply_reinforcements(
+        self, updates: list[tuple[str, int]], turn: int
+    ) -> None:
+        """Apply many LTP reinforcements in a single delete + add.
+
+        Semantically identical to calling update_reinforcement() in a loop, and
+        the same optimisation apply_weight_updates() makes for the decay pass.
+        Retrieval reinforces every record that Spreading Activation surfaces,
+        which after two hops is routinely dozens per question, so the per-record
+        version made a single answer cost dozens of table rewrites.
+        """
+        if not updates:
+            return
+
+        new_ks = dict(updates)  # last write wins, as in the sequential loop
+        quoted = ", ".join(f"'{record_id}'" for record_id in new_ks)
+        rows = self._table.search().where(f"id IN ({quoted})").limit(10000).to_list()
+        if not rows:
+            return
+
+        for row in rows:
+            row.pop("_distance", None)
+            row["weight"] = 1.0
+            row["consolidation_index"] = new_ks[row["id"]]
+            row["last_reinforced_turn"] = turn
+
+        self._table.delete(f"id IN ({quoted})")
+        self._table.add(rows)
 
     def delete(self, record_id: str) -> None:
         self._table.delete(f"id = '{record_id}'")

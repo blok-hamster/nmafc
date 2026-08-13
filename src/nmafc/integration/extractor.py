@@ -8,13 +8,31 @@ EXTRACTION_SYSTEM_PROMPT = """You are a helpful conversational AI assistant with
 As you respond to the user, you MUST simultaneously analyze the conversation for any facts, state changes, or information worth remembering. When you identify such information, call the `update_memory` tool with structured updates.
 
 ## Memory Classification Rules:
-- **CoreAnchor**: Permanent identity facts (name, medical conditions, allergies, life-safety info). These never expire.
-- **ActiveContext**: Current state that may change (schedules, active goals, ongoing tasks, relationships). Moderate lifespan.
-- **EphemeralState**: Transient information (current mood, passing comments, small talk). Short lifespan.
+Classify by HOW LONG THE FACT STAYS TRUE, not by how important it feels.
+
+- **CoreAnchor**: Never expires. Facts that remain true indefinitely once established.
+  - Identity: name, age, birthplace, where they live, languages, pronouns.
+  - Health & safety: diagnoses, allergies, disabilities, long-term medication.
+  - Relationships: family, partners, close friends, pets, and who people are to each other.
+  - Completed events: anything that has already happened, together with when it happened. A past event never becomes untrue — someone losing a job, graduating, moving city or winning something stays a fact forever, even after the situation it created changes.
+  - Enduring preferences & values: long-held tastes, beliefs, interests, what someone cares about.
+- **ActiveContext**: Moderate lifespan. The PRESENT situation, which a later turn may replace — current job or project, current plans and schedules, ongoing goals, where something currently stands.
+- **EphemeralState**: Short lifespan. Only genuinely momentary things — how someone feels right now, passing remarks, small talk. If a fact would still be worth knowing a month from now, it is NOT EphemeralState.
+
+## Event vs. State:
+When a turn reports something that HAPPENED and also the situation it produced, record BOTH as separate entities:
+- the event itself, as CoreAnchor, named for the event and carrying its date (e.g. 'job_loss_jan_2023', 'move_to_berlin').
+- the resulting current situation, as ActiveContext, named for the state (e.g. 'current_employment', 'current_city').
+Collapsing the two into one 'status' entity gives the permanent fact the short lifetime of the changeable one, and the permanent fact is lost.
+
+## Dates:
+Exchanges may be prefixed with a session timestamp, e.g. "[Session — 1:56 pm on 8 May, 2023]". When a fact is time-anchored, state the date explicitly inside `fact_content`, resolving relative references ("yesterday", "last month", "when I was fifteen") against that timestamp. Never invent a date that is not derivable from the timestamp or from the text itself.
 
 ## Override & Naming Rules:
-- Use consistent, category-based entity names describing the topic rather than embedding specific values (e.g. 'blood_pressure_medication', 'user_allergy_latex', 'surgery_schedule', 'user_job').
+- Use consistent, category-based entity names describing the topic rather than embedding specific values (e.g. 'blood_pressure_medication', 'user_allergy_latex', 'surgery_schedule', 'current_employment').
+- Name entities for the person they concern when a conversation has more than one participant (e.g. 'maria_current_employment'), so facts about different people never collide.
 - If a new fact contradicts or replaces a previously stored fact of a different entity name (e.g. switching from lisinopril to losartan, or schedule moving from 7AM to 9AM), set `overrides_entity` to the exact entity name of the old fact so it can be suppressed and pruned.
+- Never set `overrides_entity` on a CoreAnchor completed event. A new event does not undo an earlier one; both happened.
 
 ## Important:
 - Always respond naturally to the user first.

@@ -23,13 +23,13 @@ from nmafc.storage.config import NMafcConfig, StorageConfig
 from nmafc.wrapper import NeuromorphicMemory
 
 from ..evaluation.metrics import ArmResponse
-from .base import BenchmarkArm
+from .base import BenchmarkArm, SHORT_ANSWER_RULES, build_exchanges
 
 ANSWER_SYSTEM_PROMPT = """You are a conversational AI assistant with a memory system.
 Relevant memories from past conversations are provided below.
 Answer the user's question based ONLY on information from your memories.
 If the answer is not in your memories, say "I don't know" or "This information is not available."
-Be concise — answer in a few words or a short phrase when possible."""
+Be concise — answer in a few words or a short phrase when possible.""" + SHORT_ANSWER_RULES
 
 
 class StatefulNoDecayArm(BenchmarkArm):
@@ -70,12 +70,8 @@ class StatefulNoDecayArm(BenchmarkArm):
 
     async def ingest_conversation(self, turns: list[dict]) -> None:
         """Process conversation through the memory wrapper."""
-        for turn in turns:
-            if turn["role"] == "user":
-                await self._memory.process_turn(
-                    user_msg=turn["content"],
-                    conversation_history=[turn],
-                )
+        for exchange in build_exchanges(turns):
+            await self._memory.process_turn(user_msg=exchange)
 
     async def answer_question(self, question: str) -> ArmResponse:
         """Answer using neuromorphic retrieval (without decay)."""

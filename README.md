@@ -303,6 +303,11 @@ provider_model = "openai/text-embedding-3-small"
 | `NMAFC_CONVERSATION_ID` | `storage.conversation_id` | Conversation thread isolation |
 | `NMAFC_LLM_PROVIDER_MODEL` | `llm.provider_model` | Default LLM provider |
 | `NMAFC_EMBEDDING_PROVIDER_MODEL` | `embedding.provider_model` | Default embedding provider |
+| `NMAFC_EMBEDDING_DIM` | `storage.embedding_dim` | Vector width of the hot-storage column. **Set this whenever your embedding model is not 1536-dim** (e.g. `768` for `nomic-embed-text`) |
+| `NMAFC_EMBED_PROBE_TIMEOUT` | — | Seconds to wait on the startup embedding-dimension probe before falling back to the configured value (default `30`) |
+| `NMAFC_LLM_TEMPERATURE` | — | Sampling temperature sent with every completion. Unset by default; set to `0` for reproducible benchmark runs |
+
+> **Set `NMAFC_EMBEDDING_DIM` if you use a non-1536-dim embedding model.** When it is unset, `NeuromorphicMemory` probes the provider at startup to detect the width. That probe runs the async embedder on a second event loop, so if the same provider instance has already been used on the calling loop, its connection pool is bound there and the probe blocks until the timeout expires. Setting the dimension explicitly skips the probe entirely.
 
 ## Supported Providers
 
@@ -467,18 +472,253 @@ Multiple workers (Lambda, ECS, K8s pods) all read/write the same remote storage 
 
 ## Benchmark Suite
 
-Academic-grade evaluation comparing three memory approaches on real research datasets.
+Academic-grade evaluation comparing four memory approaches on real research datasets.
 
 ### Datasets
 
 - **LoCoMo** (Maharana et al., 2024): 10 conversations, 1986 QA pairs, 5 categories
 - **LongMemEval** (Wu et al., 2024 / Zep paper): 500 questions, 6 types, 3 variants
 
-### Three Arms
+### Four Arms
 
 1. **Raw LLM** — Full context window stuffing (baseline)
-2. **Stateful No-Decay** — NMAFC with decay disabled (MemGPT/Zep-style "keep everything")
-3. **Neuromorphic** — Full NMAFC with production config (the proposed system)
+2. **RAG** — Chunked retrieval over the raw transcript (external baseline)
+3. **Neuromorphic** — Full NMAFC at the published defaults (λ_active = 0.05)
+4. **Neuromorphic Tuned** — identical, but λ_active = 0.005 (`neuromorphic_tuned`)
+
+Arms 3 and 4 differ by **exactly one number**, so the gap between them isolates
+the effect of the decay horizon and nothing else. Arm 2 is the external
+comparison: does NMAFC beat ordinary retrieval?
+
+#### Why the fourth arm exists
+
+A record is pruned once its weight decays to `w_prune`, so an ActiveContext
+memory that is never re-retrieved survives
+
+```
+exp(-λ·Δt) ≤ w_prune   →   Δt ≥ ln(1/w_prune) / λ
+```
+
+turns. At the defaults that is ln(10)/0.05 ≈ **46 turns**. LoCoMo conversations
+run 186–345 exchanges and ask every question only *after* the last one, so
+ActiveContext records are mathematically guaranteed to be gone before the first
+question is asked. The reinforcement half of the design never fires either —
+LTP resets weight on retrieval, and nothing is retrieved mid-ingestion — so
+decay runs unopposed for the entire conversation.
+
+λ for the tuned arm is derived from conversation length, not fitted to scores:
+
+| | |
+|---|---|
+| longest conversation | 345 exchanges |
+| requirement | ln(10)/λ > 345 → λ < 0.0067 |
+| chosen | **0.005** → horizon ≈ 460 turns |
+
+The principle is that the memory horizon must outlast the interaction horizon.
+That depends on the deployment's conversation length, which is a property of the
+workload rather than of the test set's answers. Deployments with longer-running
+conversations should scale λ down further.
+
+#### Removed arm: Stateful No-Decay
+
+Earlier revisions carried a fifth arm, `stateful_nodecay` — NMAFC with decay and
+pruning switched off entirely (MemGPT/Zep-style "keep everything") — as a
+matched control against `neuromorphic`. It has been **dropped from the default
+arm set**, because `neuromorphic_tuned` is a strictly better control: it differs
+from `neuromorphic` by one value instead of four, and unlike the no-decay arm it
+is a configuration you would actually ship. The code remains at
+`arms/stateful_nodecay.py` and is still runnable with `--arms stateful` for
+anyone reproducing the older comparison.
+
+The RAG arm (`scripts/benchmarks/arms/rag.py`) chunks the transcript into
+overlapping windows, embeds them once at ingest, and retrieves top-k per
+question. It makes **zero LLM calls during ingestion**, so it is a genuine
+retrieval baseline rather than a handicapped one. Tunable via
+`NMAFC_RAG_CHUNK_TURNS`, `NMAFC_RAG_CHUNK_STRIDE`, `NMAFC_RAG_TOP_K`.
+
+### Measured Dimensions
+
+| Metric | Meaning |
+|--------|---------|
+| **F1** | Normalized token-overlap against the reference answer |
+| **Judge Accuracy** | Binary correct/incorrect from an LLM-as-judge pass |
+| **Avg context** | Tokens fed to the model per question — the efficiency claim |
+| **Avg latency** | Milliseconds per answer |
+| **Total tokens** | Cumulative cost |
+
+Results are also broken down per question category (single-hop, multi-hop,
+temporal, open-domain, adversarial).
+
+### Fair-Comparison Notes
+
+Several details materially affect whether the numbers mean anything:
+
+- **All arms receive session dates and speaker names.** LoCoMo questions refer
+  to people by name and ask "when" questions; a transcript flattened to
+  `User:`/`Assistant:` with dates stripped makes the temporal category
+  unanswerable by construction.
+- **Sessions are ordered numerically, and each keeps its own timestamp.**
+  `locomo_loader.py` previously sorted the `session_<n>` keys as text, which
+  orders them `1, 10, 11, ... 19, 2, 20` — so the conversation was replayed out
+  of chronological order. The timestamps were gathered by sorting a second list
+  of `session_<n>_date_time` keys, and because the suffix changes the sort
+  order, `session_10_date_time` sorted *before* `session_1_date_time` while
+  `session_1` still sorted before `session_10`. The two lists disagreed and
+  every session was stamped with a different session's date. One conversation
+  (`conv-26`) also ships 35 date keys for 19 sessions, so any positional pairing
+  drifts further. Dates are now looked up per session key, and sessions sort on
+  the parsed integer. Fixing this alone moved the raw-LLM arm from F1 0.225 to
+  0.475 on a 30-question slice — that arm holds no memory state, so the change
+  isolates the loader defect from anything the framework does.
+- **Memory arms ingest both speakers.** `build_exchanges()` pairs each user turn
+  with the assistant turn that follows it, so memory arms see the same evidence
+  as the raw-LLM baseline. Ingesting only user turns scores the memory arms on
+  strictly less information than the baseline they are compared against.
+- **Every arm gets the same answer-format rules.** LoCoMo gold answers are 1–4
+  words, so a verbose but correct reply scores near-zero F1. `SHORT_ANSWER_RULES`
+  in `arms/base.py` is appended to every arm's answer prompt.
+
+### Memory Classification Prompt
+
+`EXTRACTION_SYSTEM_PROMPT` in `integration/extractor.py` decides which tier each
+extracted fact lands in, and therefore how long it survives. It was revised
+after the first benchmark run, for a reason visible in the stored records rather
+than in the scores:
+
+```
+CoreAnchor    jon_job_loss_catalyst  "Jon lost his job, which gave him the push..."
+ActiveContext jon_job_status         "Jon lost his job as a banker yesterday"
+```
+
+The same event was recorded twice in two tiers, and the copy carrying the date
+was the one scheduled to expire. The taxonomy offered only "permanent identity
+fact" or "current state that may change", and a completed event is neither, so
+the model reached for the state-shaped label. With `lambda_active_context =
+0.05` and `w_prune = 0.1`, an ActiveContext record is pruned after
+`ln(10)/0.05 ≈ 46` turns; LoCoMo conversations run 186–345 turns and ask every
+question at the end, so those records are gone before the first question. In the
+first run 79% of stored memories were ActiveContext or EphemeralState.
+
+The revision adds five domain-general rules: completed events are permanent and
+belong in CoreAnchor; an event and the state it produced are recorded as
+separate entities so the permanent half does not inherit the mutable half's
+lifetime; CoreAnchor covers identity, relationships, milestones and enduring
+preferences rather than only the clinical examples it previously listed;
+EphemeralState is restricted to genuinely momentary things; and time-anchored
+facts must resolve relative references against the session timestamp rather than
+inventing a date.
+
+Two caveats a reader should weigh:
+
+- **These results are not comparable to previously published NMAFC numbers.**
+  Classification drives decay, decay drives what survives to question time.
+- **The prompt was written once, from the failure mechanism, without iterating
+  against benchmark scores.** Tuning a prompt until a test-set number improves is
+  fitting to the test set. The same prompt is used by every memory arm, so the
+  comparison between them stays matched.
+
+### Reproducibility
+
+Set `NMAFC_LLM_TEMPERATURE=0` to pin sampling. Note that this reduces but does
+not eliminate run-to-run variance: mixture-of-experts models served behind a
+batching proxy can return different completions for identical requests even at
+temperature 0. Treat small-sample runs as plumbing checks, not results, and
+quote a margin of error derived from repeating a run rather than assuming
+determinism.
+
+### Reliability & Throughput
+
+`scripts/benchmarks/resilience.py` wraps both providers with:
+
+- a sliding-window rate limiter (`NMAFC_BENCH_TPM_LIMIT`, `NMAFC_BENCH_RPM_LIMIT`,
+  `NMAFC_BENCH_QUOTA_SAFETY`)
+- exponential backoff with jitter honouring `Retry-After` (`NMAFC_BENCH_MAX_RETRIES`)
+
+One failure mode this does **not** cover: Ollama unloads an idle model after
+about five minutes. The raw-LLM arm requests no embeddings, so on a multi-arm
+run the embedder can be evicted while it runs, and the next arm fails with
+`dial tcp 127.0.0.1:<port>: connection refused` against Ollama's internal runner
+port — a 400 from the client's perspective, so the retry logic treats it as a
+bad request rather than a transient fault. Keep the model resident for the
+duration of a run:
+
+```bash
+# server-side: set before `ollama serve`
+OLLAMA_KEEP_ALIVE=-1
+```
+
+#### Batched LTP reinforcement
+
+Retrieval reinforces every record Spreading Activation surfaces, which after two
+hops is routinely dozens per question. That was applied one record at a time,
+and each `update_reinforcement` cost a scan, a delete and an add — a LanceDB
+fragment rewrite per record. Cost grew superlinearly, because every rewrite
+fragmented the table further for the next one.
+
+`HotStorage.apply_reinforcements()` now performs the whole set in a single
+delete + add, the same optimisation `apply_weight_updates()` already made for
+the decay pass. Measured on real benchmark data (330 records, 1536-dim vectors,
+40 reinforced):
+
+| | Per-record loop | Batched |
+|---|---|---|
+| 40 reinforcements | 51,068 ms | **1,322 ms** |
+
+Isolated on synthetic records the gap widens with set size — 10.7× at 10
+records, 27.9× at 30, 64.8× at 60 — confirming the superlinear shape rather than
+a constant overhead. This dominated answer latency: the memory arms measured
+~28 s per answer against the raw arm's 2.6 s, despite issuing one LLM call each.
+
+#### Judge independence
+
+`--judge` defaults to `--provider`, which makes the answering model grade its
+own output. Models favour their own phrasing, so this inflates whichever arm
+shares the judge's family. Set `NMAFC_BENCH_JUDGE` to a different family; the
+runner warns when the two match, and gives a judge on a separate deployment its
+own rate limiter so it does not queue behind the answering model's quota.
+
+The benchmark answers with `azure_v1/DeepSeek-V4-Pro` and judges with
+`azure_v1/Kimi-K2.6` (Moonshot), which is the only non-DeepSeek family the
+Foundry gateway will serve. The Claude deployments on the same resource list as
+`status: succeeded` but return `404 api_not_supported` on every chat route —
+verified on `claude-haiku-4-5` and `claude-opus-5` across the `/openai/v1` route,
+the classic `/openai/deployments` route on three api-versions, the
+`services.ai.azure.com` inference host and the Anthropic-native `/messages`
+shape. Two deployments created four days apart both fail, so this is a routing
+limitation rather than propagation lag.
+
+Kimi is a reasoning model: it spends completion tokens on `reasoning_content`
+before emitting `content`. Nothing in the codebase sets `max_tokens`, so the API
+default applies and this is fine — but adding a small `max_tokens` would make
+judgements come back empty with `finish_reason: length`. It costs ~4 s per
+judgement against DeepSeek-V4-Flash's ~0.5 s, or roughly 33 min of judging for a
+full four-arm 1,986-question run at `--judge-concurrency 16`.
+
+Note that F1 and the judge disagree systematically, and the disagreement is not
+noise. LoCoMo gold answers are terse noun phrases, so a correct but
+conversational answer is scored down by token overlap while the judge accepts
+it — "Caroline is a trans woman" against gold "Transgender woman" scores F1 0.33
+and judge ✅. Report judge accuracy as primary and F1 as secondary rather than
+tightening answer-format prompts, which would be fitting to the test set.
+
+Runs are parallel across conversations and checkpointed per arm, so an
+interrupted run resumes instead of restarting:
+
+```bash
+# resumes automatically from results/<run>/checkpoint_<arm>.json
+python -u -m scripts.benchmarks.run_locomo --arms raw,rag,neuromorphic,neuromorphic_tuned \
+  --output scripts/benchmarks/results/full/
+```
+
+Because the runner only prints when a whole conversation completes — and memory-arm
+ingestion is one LLM call per exchange — the log can look frozen for long stretches.
+`scripts/benchmarks/live_progress.py` appends a progress line every N seconds:
+
+```bash
+python -u scripts/benchmarks/live_progress.py \
+  --log scripts/benchmarks/results/full/../full.log \
+  --out scripts/benchmarks/results/live.log
+```
 
 ### Quick Start
 
@@ -486,8 +726,12 @@ Academic-grade evaluation comparing three memory approaches on real research dat
 # Install benchmark dependencies
 uv pip install -e ".[bench,llm,aws]"
 
-# Start Ollama for embeddings
-ollama serve && ollama pull nomic-embed-text
+# Tests use pytest-asyncio; without it the async tests error out instead of running
+uv pip install pytest-asyncio
+
+# Embeddings: Azure text-embedding-3-small (1536-dim) via .env, or locally:
+#   ollama serve && ollama pull nomic-embed-text
+# The local path is CPU-only on this machine and ~7x slower per embedding.
 
 # Run LoCoMo benchmark (1 conversation, single-hop, F1 only)
 PYTHONUNBUFFERED=1 python -m scripts.benchmarks.run_locomo \
@@ -495,12 +739,24 @@ PYTHONUNBUFFERED=1 python -m scripts.benchmarks.run_locomo \
   --embedding "ollama/nomic-embed-text" \
   --conversations 1 --categories "1" --skip-judge
 
+# Run all four arms in parallel, checkpointed, with a bounded question count
+python -u -m scripts.benchmarks.run_locomo \
+  --arms raw,rag,neuromorphic,neuromorphic_tuned \
+  --conversations 2 --max-questions 15 \
+  --concurrency 8 --judge-concurrency 12 \
+  --output scripts/benchmarks/results/pilot/
+
 # Run LongMemEval (10 questions, oracle variant)
 PYTHONUNBUFFERED=1 python -m scripts.benchmarks.run_longmemeval \
   --provider "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0" \
   --embedding "ollama/nomic-embed-text" \
   --variant oracle --limit 10
 ```
+
+New runner flags: `--arms` (subset to run), `--concurrency` (conversations in
+flight), `--judge-concurrency`, `--max-questions` (cap per conversation),
+`--output` (checkpoint + results directory). All default from environment
+variables — see `.env.example`.
 
 See [scripts/benchmarks/README.md](scripts/benchmarks/README.md) for full documentation of all flags, examples, and output format.
 
@@ -599,9 +855,17 @@ nmafc/
 │   └── default.toml               # Default configuration
 ├── scripts/benchmarks/             # Academic benchmark suite
 │   ├── datasets/                   # LoCoMo + LongMemEval loaders
-│   ├── arms/                       # 3 benchmark conditions
+│   ├── arms/                       # 4 benchmark conditions
+│   │   ├── base.py                # Shared answer-format rules + build_exchanges()
+│   │   ├── raw_llm.py             # Baseline: full transcript in context
+│   │   ├── rag.py                 # Chunked retrieval baseline
+│   │   ├── stateful_nodecay.py    # Retired control: decay/pruning off
+│   │   ├── neuromorphic.py        # Full NMAFC, published defaults
+│   │   └── neuromorphic_tuned.py  # Same, lambda_active_context = 0.005
 │   ├── evaluation/                 # F1 + LLM-as-judge metrics
-│   ├── run_locomo.py              # LoCoMo CLI runner
+│   ├── resilience.py              # Rate limiter + retry/backoff wrappers
+│   ├── live_progress.py           # Appends progress lines during long runs
+│   ├── run_locomo.py              # LoCoMo CLI runner (parallel + checkpointed)
 │   ├── run_longmemeval.py         # LongMemEval CLI runner
 │   └── visualize.py               # Publication-ready Plotly charts
 ├── tests/                          # pytest suite (unit + integration)
@@ -612,6 +876,11 @@ nmafc/
 ## Testing
 
 ```bash
+# pytest-asyncio is REQUIRED -- without it the async tests do not fail loudly,
+# they error out as "async def functions are not natively supported" and the
+# coverage they were meant to provide is silently absent.
+pip install pytest-asyncio
+
 # Run all tests
 pytest
 
@@ -622,6 +891,28 @@ pytest tests/test_wrapper_e2e.py -v
 # Run with coverage
 pytest --cov=nmafc
 ```
+
+## Performance Notes
+
+### Batched decay writes
+
+The decay pass runs every turn and recomputes the weight of every mutable
+record. Applying those weights one record at a time is quadratic: each
+`update_weight()` costs a scan, a delete and an add, so a turn costs `1 + 3N`
+storage operations against a table of `N` memories that grows every turn.
+
+`HotStorage.apply_weight_updates()` collapses the whole pass into one query, one
+delete and one add — 3 operations per turn regardless of `N`. `prune_cycle()`
+likewise uses `delete_many()` instead of deleting record by record.
+
+Measured on live LoCoMo ingestion: **~40s per exchange → ~5-6s per exchange**,
+with byte-identical resulting memory state. The remaining per-turn full scans
+(`get_all_mutable`, prune's `get_all`, consolidation) are still `O(n)`, so
+per-turn cost still grows slowly as memory fills.
+
+If you extend storage, prefer batch predicates (`id IN (...)`) over per-record
+calls. LanceDB writes a new data file per operation, so per-record loops produce
+thousands of tiny files and dominate ingestion time.
 
 ## Biological Analogies
 

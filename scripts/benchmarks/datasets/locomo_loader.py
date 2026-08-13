@@ -26,6 +26,16 @@ CATEGORY_NAMES = {
 }
 
 
+def _session_index(key: str) -> int:
+    """Sort key for 'session_<n>' keys, ordering them numerically.
+
+    Sorting these as plain text is wrong once a conversation has ten or more
+    sessions: 'session_10' sorts before 'session_2'.
+    """
+    part = key.split("_")[1] if "_" in key else ""
+    return int(part) if part.isdigit() else 0
+
+
 @dataclass
 class LoCoMoQA:
     question: str
@@ -59,13 +69,38 @@ class LoCoMoConversation:
         return len(self.sessions)
 
     def get_flat_history(self, up_to_session: int | None = None) -> list[dict]:
-        """Flatten sessions into a single turn list with role/content format."""
+        """Flatten sessions into a single turn list.
+
+        Each turn carries the speaker's real name and the timestamp of the
+        session it belongs to, alongside the role mapping.
+
+        Both matter for scoring. LoCoMo's temporal category asks questions like
+        "When did Jon lose his job?" against gold answers such as
+        "19 January, 2023" — answerable only from the session timestamps, which
+        this loader previously parsed into `session_dates` and then discarded
+        here. Every arm received an undated transcript, so that entire category
+        was unanswerable by construction. Speaker names matter for the same
+        reason: the questions refer to people by name, while a bare
+        role/content turn renders as "User"/"Assistant".
+
+        Consumers that only want role/content can keep ignoring the extra keys.
+        """
         sessions = self.sessions[:up_to_session] if up_to_session else self.sessions
+        dates = (
+            self.session_dates[:up_to_session] if up_to_session else self.session_dates
+        )
         turns = []
-        for session in sessions:
+        for idx, session in enumerate(sessions):
+            date = dates[idx] if idx < len(dates) else ""
             for turn in session:
                 role = "user" if turn["speaker"] == self.speaker_a else "assistant"
-                turns.append({"role": role, "content": turn["text"]})
+                turns.append({
+                    "role": role,
+                    "content": turn["text"],
+                    "speaker": turn["speaker"],
+                    "date": date,
+                    "session": idx + 1,
+                })
         return turns
 
 
@@ -86,16 +121,24 @@ def load_locomo(cache_dir: str | None = None) -> list[LoCoMoConversation]:
         conv_data = item["conversation"]
 
         session_keys = sorted(
-            k for k in conv_data.keys()
-            if k.startswith("session_") and not k.endswith("_date_time")
-        )
-        date_keys = sorted(
-            k for k in conv_data.keys()
-            if k.endswith("_date_time")
+            (
+                k for k in conv_data.keys()
+                if k.startswith("session_") and not k.endswith("_date_time")
+            ),
+            key=_session_index,
         )
 
+        # Look each timestamp up from its own session key rather than building a
+        # second sorted list. Sorting by text put the sessions in dictionary
+        # order -- 1, 10, 11, ... 19, 2, 20 -- which alone told the story out of
+        # chronological order. Worse, the date keys carry a `_date_time` suffix,
+        # so text order placed 'session_10_date_time' *before*
+        # 'session_1_date_time' while 'session_1' still sorted before
+        # 'session_10'. The two lists disagreed and every session was stamped
+        # with a different session's date, making the temporal question category
+        # unanswerable for every arm.
         sessions = [conv_data[k] for k in session_keys]
-        session_dates = [conv_data[k] for k in date_keys]
+        session_dates = [conv_data.get(f"{k}_date_time", "") for k in session_keys]
 
         qa_pairs = []
         for qa in item.get("qa", []):

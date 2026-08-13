@@ -20,6 +20,7 @@ import argparse
 import asyncio
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -29,10 +30,19 @@ try:
 except ImportError:
     pass
 
+# Windows terminals default to cp1252, which cannot encode the box-drawing
+# characters in the progress output (nor much of the dataset text). A run that
+# dies hours in on a print() is not an acceptable failure mode.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from nmafc.integration.factory import create_embedding_provider, create_llm_provider
 
 from .arms.base import BenchmarkArm
 from .arms.neuromorphic import NeuromorphicArm
+from .arms.rag import RagArm
 from .arms.raw_llm import RawLLMArm
 from .arms.stateful_nodecay import StatefulNoDecayArm
 from .datasets.longmemeval_loader import (
@@ -49,7 +59,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run LongMemEval benchmark suite")
     parser.add_argument(
         "--arms",
-        default="raw,stateful,neuromorphic",
+        default="raw,rag,stateful,neuromorphic",
         help="Comma-separated arm names to evaluate",
     )
     parser.add_argument(
@@ -81,8 +91,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--judge",
-        default=None,
-        help="Judge provider string (default: same as --provider)",
+        default=os.environ.get("NMAFC_BENCH_JUDGE"),
+        help="Judge provider string (env: NMAFC_BENCH_JUDGE, default: --provider)",
     )
     parser.add_argument(
         "--embedding",
@@ -108,6 +118,11 @@ def create_arms(
     for name in arm_names:
         if name == "raw":
             arms.append(RawLLMArm(llm_provider=llm_provider))
+        elif name == "rag":
+            arms.append(RagArm(
+                llm_provider=llm_provider,
+                embedding_provider=embedding_provider,
+            ))
         elif name == "stateful":
             arms.append(StatefulNoDecayArm(
                 llm_provider=llm_provider,
@@ -135,9 +150,16 @@ async def evaluate_arm_on_question(
     history = question.get_flat_history()
     await arm.ingest_conversation(history)
 
-    # Answer the question
+    # Answer the question. The dataset supplies the date the question is asked,
+    # which questions like "how long ago did I..." cannot be resolved without.
+    # Given identically to every arm, so it shifts absolute scores rather than
+    # favouring one arm.
+    asked = question.question
+    if question.question_date:
+        asked = f"(Today's date: {question.question_date})\n{asked}"
+
     try:
-        response = await arm.answer_question(question.question)
+        response = await arm.answer_question(asked)
     except Exception as e:
         return {
             "question_id": question.question_id,

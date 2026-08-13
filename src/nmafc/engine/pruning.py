@@ -50,7 +50,6 @@ def prune_cycle(
     all_records = hot.get_all()
     prunable_ids = identify_prunable(all_records, w_prune)
 
-    for record_id in prunable_ids:
-        hot.delete(record_id)
+    hot.delete_many(prunable_ids)
 
     return len(prunable_ids)

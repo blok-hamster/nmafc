@@ -98,8 +98,12 @@ class QueryRouter:
                         if rel.lower() not in visited_entities:
                             frontier_entities.add(rel.lower())
 
-        # Apply Long-Term Potentiation (LTP) Reinforcement to retrieved records
+        # Apply Long-Term Potentiation (LTP) Reinforcement to retrieved records.
+        # The writes are collected and applied in one batch: Spreading Activation
+        # routinely surfaces dozens of records per question, and reinforcing them
+        # one at a time cost a scan, a delete and an add each.
         final_records: list[MemoryRecord] = []
+        reinforcements: list[tuple[str, int]] = []
         for rec in active_records:
             if rec.weight < self._config.w_prune:
                 continue
@@ -108,11 +112,11 @@ class QueryRouter:
 
             if rec.memory_type != MemoryType.EPHEMERAL_STATE:
                 reinforced = reinforce(rec, current_turn)
-                self._hot.update_reinforcement(
-                    reinforced.id,
-                    new_k=reinforced.consolidation_index,
-                    turn=current_turn,
+                reinforcements.append(
+                    (reinforced.id, reinforced.consolidation_index)
                 )
+
+        self._hot.apply_reinforcements(reinforcements, turn=current_turn)
 
         return final_records
 

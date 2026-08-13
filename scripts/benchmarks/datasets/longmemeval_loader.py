@@ -52,13 +52,22 @@ class LongMemEvalQuestion:
         return len(self.haystack_sessions)
 
     def get_flat_history(self) -> list[dict]:
-        """Flatten all haystack sessions into a single turn list."""
+        """Flatten all haystack sessions into a single turn list.
+
+        Each turn carries the timestamp of the session it came from.
+        `haystack_dates` was previously parsed and then dropped here, leaving
+        every arm with an undated haystack — which makes the temporal-reasoning
+        question type unanswerable regardless of memory quality.
+        """
         turns = []
-        for session in self.haystack_sessions:
+        for idx, session in enumerate(self.haystack_sessions):
+            date = self.haystack_dates[idx] if idx < len(self.haystack_dates) else ""
             for turn in session:
                 turns.append({
                     "role": turn["role"],
                     "content": turn["content"],
+                    "date": date,
+                    "session": idx + 1,
                 })
         return turns
 
