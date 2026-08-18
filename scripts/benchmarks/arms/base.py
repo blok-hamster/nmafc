@@ -8,6 +8,7 @@ from the same dataset — they differ only in how they manage memory.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 
 from ..evaluation.metrics import ArmMetrics, ArmResponse
 
@@ -95,16 +96,52 @@ class BenchmarkArm(ABC):
 
     name: str
 
+    # Whether this arm can reopen a partly-ingested store and carry on from the
+    # middle of a conversation. False for the stateless arms, which hold their
+    # context in memory and have nothing on disk to resume from, and for which
+    # re-ingesting is nearly free anyway. The runner checks this before offering
+    # a resume, so an arm that cannot honour `start_at` is never handed one.
+    supports_ingest_resume: bool = False
+
     def __init__(self, name: str) -> None:
         self.name = name
         self.metrics = ArmMetrics(arm_name=name)
 
+    def prepare_store(
+        self, store_dir: str, conversation_id: str, fingerprint: str
+    ) -> int:
+        """Point the arm at `store_dir` and report exchanges already ingested.
+
+        The default is the old behaviour: throw away all state and start the
+        conversation from the beginning. Arms with a durable store override this
+        to reopen one whose recorded conversation and settings match, and return
+        how far it got.
+
+        Returns:
+            Number of leading exchanges already in the store; 0 to ingest all.
+        """
+        self.reset()
+        return 0
+
     @abstractmethod
-    async def ingest_conversation(self, turns: list[dict]) -> None:
+    async def ingest_conversation(
+        self,
+        turns: list[dict],
+        start_at: int = 0,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> None:
         """Feed conversation history into the memory system.
 
         Args:
             turns: List of {role: "user"|"assistant", content: str} dicts
+            start_at: Skip this many leading exchanges, already ingested by an
+                interrupted earlier run. Only meaningful when
+                `supports_ingest_resume` is True.
+            on_progress: Called after each exchange with
+                (exchanges_done, turn_clock), so the caller can checkpoint.
+                Exchanges are counted from the start of the conversation, not
+                from `start_at`, so the number means the same thing on a resumed
+                run as on a fresh one.
         """
 
     @abstractmethod

@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from nmafc.integration.base import EmbeddingProvider, LLMProvider
@@ -62,11 +63,14 @@ Be concise — answer in a few words or a short phrase when possible.""" + SHORT
 class NeuromorphicTunedArm(BenchmarkArm):
     """NMAFC with decay active but its horizon sized to the conversation."""
 
+    supports_ingest_resume = True
+
     def __init__(
         self,
         llm_provider: LLMProvider,
         embedding_provider: EmbeddingProvider,
         storage_dir: str | None = None,
+        decay_overrides: dict | None = None,
     ) -> None:
         super().__init__(name="neuromorphic_tuned")
         self._llm = llm_provider
@@ -74,6 +78,7 @@ class NeuromorphicTunedArm(BenchmarkArm):
         self._storage_dir = storage_dir or tempfile.mkdtemp(
             prefix="nmafc_bench_neurotuned_"
         )
+        self._decay_overrides = decay_overrides or {}
         self._memory: NeuromorphicMemory = None  # type: ignore[assignment]
         self._init_memory()
 
@@ -83,15 +88,24 @@ class NeuromorphicTunedArm(BenchmarkArm):
         Every field other than lambda_active_context is left at its DecayConfig
         default, so this arm and the `neuromorphic` arm differ by exactly one
         number and any gap between them is attributable to that number alone.
+
+        Run-level settings (max_hops, beta) are the exception, and only because
+        the runner passes the same `decay_overrides` to both arms: they are
+        properties of the run, not of this arm. lambda_active_context is applied
+        last so a run-level override can never silently turn this arm back into
+        the untuned one.
         """
+        decay_overrides: dict = {
+            **self._decay_overrides,
+            "lambda_active_context": LAMBDA_ACTIVE_CONTEXT_TUNED,
+        }
+
         config = NMafcConfig(
             storage=StorageConfig(
                 hot_uri=str(Path(self._storage_dir) / "hot_lancedb"),
                 cold_uri=str(Path(self._storage_dir) / "cold.db"),
             ),
-            decay=DecayConfig(
-                lambda_active_context=LAMBDA_ACTIVE_CONTEXT_TUNED,
-            ),
+            decay=DecayConfig(**decay_overrides),
         )
         self._memory = NeuromorphicMemory(
             llm_provider=self._llm,
@@ -99,10 +113,52 @@ class NeuromorphicTunedArm(BenchmarkArm):
             config=config,
         )
 
-    async def ingest_conversation(self, turns: list[dict]) -> None:
-        """Process conversation through the full neuromorphic pipeline."""
-        for exchange in build_exchanges(turns):
+    def prepare_store(
+        self, store_dir: str, conversation_id: str, fingerprint: str
+    ) -> int:
+        """Reopen a matching half-built store, or start this conversation over.
+
+        Restoring `_current_turn` is not optional. It lives in memory and starts
+        at 0, so reopening a store without it would leave records stamped
+        `created_at_turn=168` in a system that believes no turns have happened:
+        every decay and reinforcement calculation afterwards would be computed
+        against a clock running 168 turns behind the data.
+        """
+        from scripts.benchmarks import ingest_checkpoint
+
+        target = Path(store_dir)
+        state = ingest_checkpoint.read(target, conversation_id, fingerprint)
+        if state is None:
+            self._storage_dir = str(target)
+            self.reset()
+            return 0
+
+        if self._memory:
+            self._memory.close()
+        self._storage_dir = str(target)
+        self._init_memory()
+        self._memory._current_turn = state.turn
+        return state.exchanges_done
+
+    async def ingest_conversation(
+        self,
+        turns: list[dict],
+        start_at: int = 0,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> None:
+        """Process conversation through the full neuromorphic pipeline.
+
+        Skipping the first `start_at` exchanges is safe because
+        `build_exchanges` is a pure function of `turns`: the same history always
+        yields the same list in the same order, so index N here is the same
+        exchange index N was in the run that was interrupted.
+        """
+        for index, exchange in enumerate(build_exchanges(turns)):
+            if index < start_at:
+                continue
             await self._memory.process_turn(user_msg=exchange)
+            if on_progress is not None:
+                on_progress(index + 1, self._memory.current_turn)
 
     async def answer_question(self, question: str) -> ArmResponse:
         """Answer using neuromorphic retrieval with the lengthened horizon."""

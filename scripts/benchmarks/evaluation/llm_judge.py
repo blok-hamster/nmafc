@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from nmafc.integration.base import LLMProvider
@@ -79,15 +80,35 @@ async def judge_batch(
     judge_provider: LLMProvider,
     concurrency: int = 5,
     retry_on_error: int = 2,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> list[JudgeResult]:
     """Judge a batch of answers with controlled concurrency.
 
     Each item should have keys: question, predicted, gold_answer
+
+    `on_progress(done, total)` is called as verdicts land. Judging ~2,000
+    answers is a single silent gather that can run 20+ minutes, which is
+    indistinguishable from a hang in a log file; the callback is what makes it
+    observable. Counting completions is safe under asyncio's single-threaded
+    scheduling -- no lock is needed for `done += 1`.
     """
     semaphore = asyncio.Semaphore(concurrency)
     results: list[JudgeResult] = []
+    done = 0
+    # Roughly ten updates per batch, whatever its size: a fixed stride prints
+    # nothing at all on a short pilot batch and floods a full 2,000-answer run.
+    step = max(1, min(100, len(items) // 10))
 
     async def _judge_one(item: dict[str, str]) -> JudgeResult:
+        nonlocal done
+        try:
+            return await _judge_inner(item)
+        finally:
+            done += 1
+            if on_progress is not None and (done % step == 0 or done == len(items)):
+                on_progress(done, len(items))
+
+    async def _judge_inner(item: dict[str, str]) -> JudgeResult:
         async with semaphore:
             for attempt in range(retry_on_error + 1):
                 try:

@@ -1,3 +1,4 @@
+import math
 import tempfile
 from pathlib import Path
 
@@ -79,6 +80,43 @@ class TestSearch:
         assert results == []
 
 
+class TestSearchScoreIsCosineSimilarity:
+    """`score` is consumed as a similarity in [0, 1] and compared to DecayConfig.theta.
+
+    LanceDB defaults to L2, under which `1 - distance` is not a similarity at
+    all. These pin the metric by asserting the exact analytic cosine value: a
+    query at 45 degrees to a stored vector scores 0.707 under cosine but 0.0
+    under the L2 default, so a silent regression to L2 fails loudly here rather
+    than by making every retrieval threshold unreachable in production.
+    """
+
+    def unit(self, *values: float) -> list[float]:
+        return list(values) + [0.0] * (EMBED_DIM - len(values))
+
+    def test_identical_vector_scores_one(self, hot: HotStorage):
+        emb = self.unit(1.0)
+        hot.upsert(make_record(), emb)
+        results = hot.search(emb, top_k=1)
+        assert results[0].score == pytest.approx(1.0, abs=1e-4)
+
+    def test_orthogonal_vector_scores_zero(self, hot: HotStorage):
+        hot.upsert(make_record(), self.unit(1.0))
+        results = hot.search(self.unit(0.0, 1.0), top_k=1)
+        assert results[0].score == pytest.approx(0.0, abs=1e-4)
+
+    def test_partial_overlap_matches_analytic_cosine(self, hot: HotStorage):
+        hot.upsert(make_record(), self.unit(1.0))
+        results = hot.search(self.unit(1.0, 1.0), top_k=1)
+        assert results[0].score == pytest.approx(0.70710678, abs=1e-4)
+
+    def test_magnitude_does_not_change_the_score(self, hot: HotStorage):
+        """Cosine ignores length; L2 does not. Embedders do not always normalise."""
+        hot.upsert(make_record(), self.unit(1.0))
+        short = hot.search(self.unit(1.0, 1.0), top_k=1)[0].score
+        long = hot.search(self.unit(9.0, 9.0), top_k=1)[0].score
+        assert short == pytest.approx(long, abs=1e-4)
+
+
 class TestGetByEntity:
     def test_finds_matching_entity(self, hot: HotStorage):
         hot.upsert(make_record(entity="medication"), make_embedding(0.1))
@@ -113,6 +151,95 @@ class TestUpdateWeight:
         updated = hot.get_record(record.id)
         assert updated is not None
         assert abs(updated.weight - 0.5) < 0.01
+
+
+class TestApplyWeightUpdates:
+    def test_applies_weights(self, hot: HotStorage):
+        records = [make_record(entity=f"e{i}") for i in range(3)]
+        for i, rec in enumerate(records):
+            hot.upsert(rec, make_embedding(0.1 + i * 0.05))
+
+        hot.apply_weight_updates([(rec.id, 0.5) for rec in records])
+
+        for rec in records:
+            got = hot.get_record(rec.id)
+            assert got is not None
+            assert abs(got.weight - 0.5) < 1e-6
+
+    def test_decay_turn_advances_the_clock(self, hot: HotStorage):
+        record = make_record(last_reinforced_turn=1)
+        hot.upsert(record, make_embedding())
+
+        hot.apply_weight_updates([(record.id, 0.9)], decay_turn=7)
+
+        got = hot.get_record(record.id)
+        assert got is not None
+        assert got.last_reinforced_turn == 7
+
+    def test_clock_is_left_alone_without_decay_turn(self, hot: HotStorage):
+        """Suppression and other non-decay writes must not reset the decay clock."""
+        record = make_record(last_reinforced_turn=1)
+        hot.upsert(record, make_embedding())
+
+        hot.apply_weight_updates([(record.id, 0.4)])
+
+        got = hot.get_record(record.id)
+        assert got is not None
+        assert got.last_reinforced_turn == 1
+
+    def test_repeated_passes_match_the_closed_form(self, hot: HotStorage):
+        """Decay over n turns must equal w0 * e^{-lambda*n}, not compound.
+
+        The stored weight is read back as w0 on the next pass. Without the clock
+        advancing, turn n applies the whole elapsed span to a weight that has
+        already absorbed n-1 turns of it, giving e^{-lambda*n(n+1)/2}: an
+        ActiveContext record hits the 0.1 prune threshold at turn 10 rather than
+        turn 46. This pins the arithmetic end to end through storage, which is
+        where the double-count lived; decay_record() alone always looked right.
+        """
+        from nmafc.engine.decay import decay_all
+        from nmafc.schemas.memory import DecayConfig
+
+        config = DecayConfig()
+        turns = 12
+        record = make_record(
+            memory_type=MemoryType.ACTIVE_CONTEXT,
+            weight=1.0,
+            consolidation_index=0,
+            created_at_turn=0,
+            last_reinforced_turn=0,
+        )
+        hot.upsert(record, make_embedding())
+
+        for turn in range(1, turns + 1):
+            updates = decay_all(hot.get_all_mutable(), turn, config)
+            hot.apply_weight_updates(updates, decay_turn=turn)
+
+        got = hot.get_record(record.id)
+        assert got is not None
+        expected = math.exp(-config.lambda_active_context * turns)
+        assert got.weight == pytest.approx(expected, rel=1e-6)
+
+    def test_core_anchors_keep_their_clock(self, hot: HotStorage):
+        """decay_all skips anchors, so the pass must never stamp one."""
+        from nmafc.engine.decay import decay_all
+        from nmafc.schemas.memory import DecayConfig
+
+        anchor = make_record(
+            entity="identity",
+            memory_type=MemoryType.CORE_ANCHOR,
+            last_reinforced_turn=1,
+        )
+        hot.upsert(anchor, make_embedding())
+
+        hot.apply_weight_updates(
+            decay_all(hot.get_all_mutable(), 9, DecayConfig()), decay_turn=9
+        )
+
+        got = hot.get_record(anchor.id)
+        assert got is not None
+        assert got.weight == 1.0
+        assert got.last_reinforced_turn == 1
 
 
 class TestUpdateReinforcement:

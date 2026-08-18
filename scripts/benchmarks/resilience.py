@@ -43,8 +43,40 @@ RPM_LIMIT = int(os.environ.get("NMAFC_BENCH_RPM_LIMIT", "500"))
 SAFETY = float(os.environ.get("NMAFC_BENCH_QUOTA_SAFETY", "0.85"))
 MAX_RETRIES = int(os.environ.get("NMAFC_BENCH_MAX_RETRIES", "6"))
 
+# Wall-clock budget for riding out a dead network link, as opposed to a busy
+# server. These are different failures and deserve different budgets: a 429
+# means the service is up and answering, so six quick retries is the right
+# response, while "connection error" means the link is gone and no number of
+# fast retries helps -- only waiting does.
+#
+# Sized from the actual failure on this machine: a dropout at 23:55 exhausted
+# the 6-retry budget (which spans ~2 minutes) and killed four conversations
+# mid-ingestion, discarding ~2.5 hours of extraction work each. 20 minutes
+# covers a router reboot or an ISP blip with room to spare, and costs nothing
+# when the network is healthy because the budget only starts ticking on the
+# first network error.
+NETWORK_RETRY_BUDGET_S = float(
+    os.environ.get("NMAFC_BENCH_NETWORK_RETRY_BUDGET_S", "1200")
+)
+
 _RETRYABLE = ("429", "500", "502", "503", "504", "timeout", "timed out",
               "connection", "overloaded", "rate limit", "ratelimit")
+
+# Failures of the link itself rather than of the service behind it.
+_NETWORK = ("connection", "timed out", "timeout", "unreachable", "reset by peer",
+            "name resolution", "getaddrinfo", "ssl", "socket", "network")
+
+
+def is_network_error(exc: Exception) -> bool:
+    """True when the link is down, rather than the server being busy or angry.
+
+    An exception carrying a status_code got a real HTTP response back, which
+    means the connection worked -- that is a server-side condition and belongs
+    on the ordinary retry budget, however it happens to be worded.
+    """
+    if getattr(exc, "status_code", None) is not None:
+        return False
+    return any(t in str(exc).lower() for t in _NETWORK)
 
 
 def is_retryable(exc: Exception) -> bool:
@@ -114,6 +146,56 @@ class RateLimiter:
         }
 
 
+class _Backoff:
+    """Retry bookkeeping shared by the LLM and embedding wrappers.
+
+    Keeps two independent budgets. Ordinary retryable failures (429, 5xx) spend
+    the `max_retries` count. Network failures spend wall-clock time instead and
+    do *not* consume that count, so a long outage cannot be converted into a
+    permanent give-up by a handful of fast reconnect attempts -- which is
+    exactly how four conversations were lost mid-run.
+    """
+
+    def __init__(self, max_retries: int, label: str) -> None:
+        self._max_retries = max_retries
+        self._label = label
+        self._attempt = 0
+        self._net_attempt = 0
+        self._deadline: float | None = None
+
+    async def wait(self, exc: Exception) -> bool:
+        """Sleep for the appropriate backoff. False means stop retrying."""
+        if is_network_error(exc):
+            now = time.monotonic()
+            if self._deadline is None:
+                self._deadline = now + NETWORK_RETRY_BUDGET_S
+                print(f"    [net] {self._label}: link down "
+                      f"({type(exc).__name__}); will keep retrying for up to "
+                      f"{NETWORK_RETRY_BUDGET_S / 60:.0f} min")
+            if now >= self._deadline:
+                return False
+            delay = min(30.0, 5.0 * 2 ** min(self._net_attempt, 3))
+            self._net_attempt += 1
+            await asyncio.sleep(delay + random.uniform(0, 0.5 * delay))
+            return True
+
+        if self._attempt >= self._max_retries or not is_retryable(exc):
+            return False
+        delay = retry_after_seconds(exc)
+        if delay is None:
+            delay = min(60.0, 2.0**self._attempt)
+        self._attempt += 1
+        await asyncio.sleep(delay + random.uniform(0, 0.5 * delay + 0.25))
+        return True
+
+    def recovered(self) -> None:
+        """Call after a success, so a later outage gets a fresh budget."""
+        if self._deadline is not None:
+            print(f"    [net] {self._label}: link back")
+            self._deadline = None
+            self._net_attempt = 0
+
+
 def estimate_tokens(messages: list[dict], system_prompt: str) -> int:
     chars = len(system_prompt) + sum(len(m.get("content") or "") for m in messages)
     return chars // 4 + 256  # + expected completion
@@ -141,7 +223,8 @@ class RetryingLLMProvider(LLMProvider):
         system_prompt: str,
     ) -> tuple[str, list[MemoryStateUpdate]]:
         last: Exception | None = None
-        for attempt in range(self._max_retries + 1):
+        backoff = _Backoff(self._max_retries, "llm")
+        while True:
             if self._limiter:
                 await self._limiter.acquire(estimate_tokens(messages, system_prompt))
             try:
@@ -149,22 +232,18 @@ class RetryingLLMProvider(LLMProvider):
                     messages=messages, system_prompt=system_prompt
                 )
                 self.calls += 1
+                backoff.recovered()
                 return result
             except Exception as exc:  # noqa: BLE001 - classified below
                 last = exc
-                if attempt >= self._max_retries or not is_retryable(exc):
+                if not await backoff.wait(exc):
                     break
                 self.retries += 1
-                delay = retry_after_seconds(exc)
-                if delay is None:
-                    delay = min(60.0, 2.0**attempt)
-                await asyncio.sleep(delay + random.uniform(0, 0.5 * delay + 0.25))
 
         self.failures += 1
         # A dead call must not abort a multi-hour run. Return empty so the
         # question is scored as a miss and the failure shows up in the report.
-        print(f"    [retry] giving up after {self._max_retries} retries: "
-              f"{type(last).__name__}: {str(last)[:140]}")
+        print(f"    [retry] giving up: {type(last).__name__}: {str(last)[:140]}")
         return "", []
 
     def stats(self) -> dict:
@@ -192,21 +271,20 @@ class RetryingEmbeddingProvider(EmbeddingProvider):
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         last: Exception | None = None
-        for attempt in range(self._max_retries + 1):
+        backoff = _Backoff(self._max_retries, "embed")
+        while True:
             if self._limiter:
                 await self._limiter.acquire(sum(len(t) for t in texts) // 4)
             try:
                 result = await self._inner.embed(texts)
                 self.calls += 1
+                backoff.recovered()
                 return result
             except Exception as exc:  # noqa: BLE001 - classified below
                 last = exc
-                if attempt >= self._max_retries or not is_retryable(exc):
+                if not await backoff.wait(exc):
                     raise
                 self.retries += 1
-                delay = retry_after_seconds(exc) or min(30.0, 2.0**attempt)
-                await asyncio.sleep(delay + random.uniform(0, 0.5 * delay + 0.25))
-        raise last  # type: ignore[misc]
 
     def stats(self) -> dict:
         return {"calls": self.calls, "retries": self.retries}

@@ -82,10 +82,65 @@ class DecayConfig(BaseModel):
     eta: float = Field(default=0.15, gt=0.0, description="Consolidation constant")
     gamma: float = Field(default=0.1, ge=0.0, le=1.0, description="Suppression multiplier")
     w_prune: float = Field(default=0.1, ge=0.0, le=1.0, description="Eviction threshold")
-    theta: float = Field(default=0.75, ge=0.0, le=1.0, description="Retrieval similarity threshold")
+    # Cosine similarity below which Hot RAM is judged to hold nothing on-topic
+    # and the Cold ROM keyword fallback fires. Derived from the separation
+    # between answerable and unanswerable queries, measured on two populated
+    # LoCoMo stores (410 and 330 records, text-embedding-3-small) by scoring each
+    # store against its own questions and against another conversation's:
+    #
+    #             on-topic top-1        off-topic top-1
+    #   conv-26   0.493 - 0.867         0.201 - 0.472
+    #   conv-30   0.403 - 0.873         0.177 - 0.481
+    #
+    # The two populations barely overlap, and 0.45 sits in the gap: it wrongly
+    # falls back on 0-2% of answerable queries while catching 97-98% of
+    # unanswerable ones. It is deliberately biased toward the on-topic side,
+    # because a spurious fallback injects fallback_keyword_limit BM25 rows into
+    # a context Hot RAM had already answered correctly.
+    #
+    # The previous default of 0.75 predates the search metric being fixed to
+    # cosine; under the old L2 arithmetic no hit ever scored above 0, so the
+    # value was unreachable and untested. Against real scores it fires on 58-65%
+    # of questions, which makes the fallback the default path rather than a
+    # fallback. Chosen from score distributions only -- never from answer keys.
+    theta: float = Field(default=0.45, ge=0.0, le=1.0, description="Retrieval similarity threshold")
     top_k: int = Field(default=10, gt=0)
     fallback_keyword_limit: int = Field(default=20, gt=0)
     max_hops: int = Field(default=2, ge=0, description="Max graph traversal depth for Spreading Activation")
+    # Whether the Cold ROM fallback searches by meaning (dense vectors over the
+    # archive, plus one hop of link expansion inside it) or by shared words
+    # alone. False reproduces keyword-only fallback exactly, so this is the
+    # ablation control for archive retrieval -- the same role beta = 0 plays for
+    # clustering decay. It exists because dense archive fallback shipped
+    # alongside two extractor changes and could not afterwards be told apart
+    # from them; anything that cannot be switched off cannot be attributed.
+    cold_semantic_fallback: bool = Field(
+        default=True,
+        description="Search Cold ROM by meaning and links, not keywords alone",
+    )
+    # Protection a fact earns from sitting in a densely interlinked
+    # neighbourhood: lambda is scaled by (1 - beta * C), where C is the local
+    # clustering coefficient of the fact's entity. beta = 0 disables the
+    # mechanism and reproduces type-and-consolidation decay exactly, so it
+    # doubles as the ablation control.
+    #
+    # Clustering, not degree. Lin et al. (2026, Science 393, eaee7004) found
+    # that hippocampal memory survived the elimination of most synapses, and
+    # that what survived was *clustered* connectivity -- synapses grouped within
+    # 5um on a dendrite, sitting on shared multi-synaptic boutons. Their
+    # anaesthesia control is the reason degree is the wrong measure: synapse
+    # density recovered to naive levels while the memory stayed impaired, so a
+    # raw count of connections predicted nothing. Counting related_entities
+    # would reproduce exactly the measure their control rules out; the
+    # clustering coefficient asks the question they actually answered, which is
+    # whether a node's neighbours are connected to each other.
+    #
+    # The mapping from spatial clustering on a dendrite to graph clustering over
+    # entity names is an analogy. No claim of derivation is made.
+    beta: float = Field(
+        default=0.0, ge=0.0, lt=1.0,
+        description="Clustering protection strength for decay (0 = disabled)",
+    )
     auto_consolidate_turns: int = Field(default=5, ge=0, description="Interval in turns for automatic REM consolidation")
 
     def get_lambda_base(self, memory_type: MemoryType) -> float:

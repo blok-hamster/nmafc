@@ -23,6 +23,8 @@ differences come from strategy rather than from a different vector index.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import os
 import shutil
 import tempfile
@@ -122,8 +124,19 @@ class RagArm(BenchmarkArm):
                 break  # final window already reached the end
         return chunks
 
-    async def ingest_conversation(self, turns: list[dict]) -> None:
-        """Chunk, embed, and store. No LLM call — this is the whole point."""
+    async def ingest_conversation(
+        self,
+        turns: list[dict],
+        start_at: int = 0,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> None:
+        """Chunk, embed, and store. No LLM call — this is the whole point.
+
+        `start_at` is accepted and ignored: this arm declares
+        `supports_ingest_resume = False`, so the runner never offers it a resume
+        and always hands 0. Chunking is a single batched embed rather than one
+        call per exchange, so there is no partial state a resume could recover.
+        """
         chunks = self._chunk(turns)
         if not chunks:
             return

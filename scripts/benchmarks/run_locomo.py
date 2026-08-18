@@ -37,11 +37,13 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
+from nmafc.schemas.memory import DecayConfig
 from nmafc.integration.factory import (
     create_embedding_provider,
     create_llm_provider,
 )
 
+from . import ingest_checkpoint
 from .arms.base import BenchmarkArm
 from .arms.neuromorphic import NeuromorphicArm
 from .arms.neuromorphic_tuned import NeuromorphicTunedArm
@@ -118,6 +120,21 @@ def parse_args() -> argparse.Namespace:
         help="Resume from checkpoint file",
     )
     parser.add_argument(
+        "--ingest-checkpoint-every",
+        type=int,
+        default=25,
+        help=(
+            "Save ingestion progress every N exchanges so an interrupted run "
+            "resumes mid-conversation instead of re-ingesting it. 0 disables. "
+            "The run-level --checkpoint only records whole finished "
+            "conversations, so without this a drop at exchange 168 of 211 "
+            "throws away every one of those 168 LLM extraction calls -- which "
+            "is what a connection drop at 00:21 on 2026-08-18 cost. Stores go "
+            "under <output>/stores/, which also makes them reusable by the "
+            "_ab_* harnesses instead of being lost in a temp directory."
+        ),
+    )
+    parser.add_argument(
         "--concurrency",
         type=int,
         default=int(os.environ.get("NMAFC_BENCH_CONCURRENCY", "8")),
@@ -139,47 +156,263 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Cap questions per conversation (pilot runs only; omit for the full set)",
     )
+    parser.add_argument(
+        "--max-hops",
+        type=int,
+        default=(
+            int(os.environ["NMAFC_BENCH_MAX_HOPS"])
+            if os.environ.get("NMAFC_BENCH_MAX_HOPS")
+            else None
+        ),
+        help=(
+            "Spreading Activation depth for the memory arms (env: "
+            "NMAFC_BENCH_MAX_HOPS). 0 disables graph traversal. Omit to use the "
+            "DecayConfig default. Set explicitly so the results file records "
+            "which setting produced the numbers -- a paired A/B measured 2-hop "
+            "traversal costing 3.5x context for no accuracy gain, so this is a "
+            "parameter a reader will want to check rather than assume."
+        ),
+    )
+    parser.add_argument(
+        "--beta",
+        type=float,
+        default=(
+            float(os.environ["NMAFC_BENCH_BETA"])
+            if os.environ.get("NMAFC_BENCH_BETA")
+            else None
+        ),
+        help=(
+            "Clustering protection strength for decay, in [0, 1) (env: "
+            "NMAFC_BENCH_BETA). Scales each record's decay rate by "
+            "(1 - beta * C), where C is the local clustering coefficient of its "
+            "entity in the related_entities graph. 0 disables the mechanism and "
+            "reproduces plain type-and-consolidation decay exactly, which makes "
+            "it the ablation control for any run with beta > 0. Omit to use the "
+            "DecayConfig default."
+        ),
+    )
+    parser.add_argument(
+        "--log-file",
+        default=os.environ.get("NMAFC_BENCH_LOG_FILE"),
+        help=(
+            "Mirror all console output to this file, timestamped and flushed "
+            "per line (env: NMAFC_BENCH_LOG_FILE). Appends, so a resumed run "
+            "extends the same log rather than truncating it."
+        ),
+    )
     return parser.parse_args()
 
 
+class _TeeStream:
+    """Mirror stdout to a log file, timestamped and flushed on every line.
+
+    A full run takes hours and prints nothing for minutes at a time during
+    ingestion, so the only way to tell "working" from "hung" is a file that
+    updates live. Buffering would defeat that entirely, hence the flush after
+    every write on both sinks -- the cost is negligible next to an API call.
+
+    Timestamps are prefixed per line rather than per write() because print()
+    emits the text and the newline as separate calls; `_at_line_start` tracks
+    which of the two we are in so a stamp never lands mid-line.
+    """
+
+    def __init__(self, stream, path: Path) -> None:
+        self._stream = stream
+        self._file = open(path, "a", encoding="utf-8", errors="replace")
+        self._at_line_start = True
+
+    def write(self, text: str) -> int:
+        self._stream.write(text)
+        self._stream.flush()
+        for i, part in enumerate(text.split("\n")):
+            if i:
+                self._file.write("\n")
+                self._at_line_start = True
+            if not part:
+                continue
+            if self._at_line_start:
+                self._file.write(time.strftime("[%H:%M:%S] "))
+                self._at_line_start = False
+            self._file.write(part)
+        self._file.flush()
+        return len(text)
+
+    def flush(self) -> None:
+        self._stream.flush()
+        self._file.flush()
+
+    def close(self) -> None:
+        self._file.close()
+
+    def __getattr__(self, name):  # isatty, encoding, fileno, ...
+        return getattr(self._stream, name)
+
+
+async def _heartbeat(arm: BenchmarkArm, conv_id: str, total: int, every: int = 60):
+    """Report progress while a conversation ingests.
+
+    Ingestion is one LLM extraction call per exchange and can run 20+ minutes on
+    a 345-exchange conversation while printing nothing. Rather than thread a
+    callback through all five arms, this polls state the memory arms already
+    maintain: `current_turn` counts processed exchanges and Hot RAM's count is
+    the facts extracted so far. Arms without a memory (raw, rag) still get an
+    elapsed-time line, which is enough to distinguish slow from stuck.
+    """
+    start = time.perf_counter()
+    while True:
+        await asyncio.sleep(every)
+        mins = (time.perf_counter() - start) / 60
+        memory = getattr(arm, "_memory", None)
+        if memory is None:
+            print(f"    [{arm.name}/{conv_id}] ingesting… {mins:.1f} min elapsed")
+            continue
+        try:
+            done, records = memory.current_turn, memory._hot.count()
+        except Exception:  # noqa: BLE001 - a heartbeat must never kill a run
+            continue
+        rate = done / mins if mins else 0.0
+        eta = (total - done) / rate if rate else float("inf")
+        print(
+            f"    [{arm.name}/{conv_id}] ingesting {done}/{total} exchanges, "
+            f"{records} facts, {mins:.1f} min elapsed, ~{eta:.1f} min left"
+        )
+
+
+def _metrics_snapshot(template: BenchmarkArm, workers: list[BenchmarkArm]) -> dict:
+    """Combine the restored and in-flight metric samples into one record.
+
+    The template carries whatever a previous run banked; the workers carry what
+    this run has measured so far. Neither alone is the arm's cost, which is why
+    a resumed arm reported 0 ms latency and 0 tokens: the workers had done no
+    answering, and nothing had ever put the earlier samples back.
+    """
+    lat, prompt, completion, ctx = [], [], [], []
+    for source in [template, *workers]:
+        lat.extend(source.metrics._latencies)
+        prompt.extend(source.metrics._prompt_tokens)
+        completion.extend(source.metrics._completion_tokens)
+        ctx.extend(source.metrics._context_tokens)
+    return {
+        "latencies": lat,
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "context_tokens": ctx,
+    }
+
+
 def _write_checkpoint(
-    output_dir: Path, arm_name: str, by_conversation: dict[str, list[dict]]
+    output_dir: Path,
+    arm_name: str,
+    by_conversation: dict[str, list[dict]],
+    metrics: dict | None = None,
 ) -> None:
     """Persist per-conversation results so a killed run can resume."""
     path = output_dir / f"checkpoint_{arm_name}.json"
     payload = {
         "arm": arm_name,
         "completed_conversations": len(by_conversation),
+        # Per-call cost samples, not just their averages: p50/p95 latency cannot
+        # be recomputed from a mean, and the comparison table reports both.
+        "metrics": metrics or {},
         "by_conversation": by_conversation,
     }
     tmp = path.with_suffix(".json.tmp")
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
     tmp.replace(path)  # atomic, so a crash mid-write cannot corrupt the file
 
 
-def _load_checkpoints(output_dir: Path, arm_names: list[str]) -> dict[str, dict]:
-    """Read prior checkpoints so completed conversations are not re-run."""
+def _rebuild_metrics_from_rows(rows: list[dict]) -> dict:
+    """Recover what the per-question rows already record: latency and context.
+
+    Checkpoints written before metrics were persisted still carry `latency_ms`
+    and `context_tokens` on every row, so those two are exactly recoverable.
+    Prompt and completion counts were only ever held in memory, so they stay
+    empty here rather than being guessed -- an arm restored from an old
+    checkpoint will report its true latency and context size, and a total token
+    count of zero, which is visibly missing rather than quietly wrong.
+    """
+    return {
+        "latencies": [r["latency_ms"] for r in rows if r.get("latency_ms") is not None],
+        "prompt_tokens": [],
+        "completion_tokens": [],
+        "context_tokens": [
+            r["context_tokens"] for r in rows if r.get("context_tokens") is not None
+        ],
+    }
+
+
+def _load_checkpoints(
+    output_dir: Path, arm_names: list[str]
+) -> tuple[dict[str, dict], dict[str, dict]]:
+    """Read prior checkpoints so completed conversations are not re-run.
+
+    Returns (completed conversations per arm, restored cost metrics per arm).
+    """
     completed: dict[str, dict] = {}
+    restored_metrics: dict[str, dict] = {}
     for name in arm_names:
         arm_label = {"raw": "raw_llm", "stateful": "stateful_nodecay"}.get(name, name)
         path = output_dir / f"checkpoint_{arm_label}.json"
         if not path.exists():
             continue
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
-            completed[arm_label] = data.get("by_conversation", {})
+            by_conv = data.get("by_conversation", {})
+            # Drop conversations recorded with zero questions. A conversation
+            # always has questions, so an empty list can only mean it died
+            # mid-run and was checkpointed anyway (a bug fixed in the worker
+            # above). Treating those as complete is what silently shrinks an
+            # arm's question set; dropping them here repairs checkpoints
+            # already written by the old code, so a resume retries them.
+            dead = [cid for cid, rows in by_conv.items() if not rows]
+            for cid in dead:
+                del by_conv[cid]
+            if dead:
+                print(f"  {path.name}: discarding {len(dead)} empty "
+                      f"conversation(s) {dead} — will re-run")
+            completed[arm_label] = by_conv
+            rows = [r for v in by_conv.values() for r in v]
+            metrics = data.get("metrics") or {}
+            if not metrics.get("latencies") and rows:
+                metrics = _rebuild_metrics_from_rows(rows)
+                print(f"  {path.name}: cost metrics rebuilt from "
+                      f"{len(rows)} rows (checkpoint predates metric storage; "
+                      f"token totals unavailable)")
+            restored_metrics[arm_label] = metrics
         except (json.JSONDecodeError, OSError) as exc:
             print(f"  WARNING: ignoring unreadable checkpoint {path.name}: {exc}")
-    return completed
+    return completed, restored_metrics
 
 
-def make_arm(name: str, llm_provider, embedding_provider) -> BenchmarkArm | None:
+def build_decay_overrides(args) -> dict:
+    """Collect run-level DecayConfig settings from the CLI.
+
+    Only keys the user actually passed are included, so anything left off the
+    command line keeps its DecayConfig default rather than being pinned to a
+    value the runner invented.
+    """
+    overrides: dict = {}
+    if args.max_hops is not None:
+        overrides["max_hops"] = args.max_hops
+    if args.beta is not None:
+        overrides["beta"] = args.beta
+    return overrides
+
+
+def make_arm(
+    name: str, llm_provider, embedding_provider, decay_overrides: dict | None = None
+) -> BenchmarkArm | None:
     """Build one arm instance. Each parallel worker needs its own.
 
     Arms hold live memory state and call reset() between conversations, so a
     single shared instance cannot be evaluated on two conversations at once.
+
+    `decay_overrides` applies to the neuromorphic arms only. The raw, rag and
+    stateful arms either have no decay engine or deliberately pin their own
+    settings, and passing run-level decay knobs to them would change what those
+    baselines mean.
     """
     if name == "raw":
         return RawLLMArm(llm_provider=llm_provider)
@@ -197,11 +430,13 @@ def make_arm(name: str, llm_provider, embedding_provider) -> BenchmarkArm | None
         return NeuromorphicArm(
             llm_provider=llm_provider,
             embedding_provider=embedding_provider,
+            decay_overrides=decay_overrides,
         )
     if name == "neuromorphic_tuned":
         return NeuromorphicTunedArm(
             llm_provider=llm_provider,
             embedding_provider=embedding_provider,
+            decay_overrides=decay_overrides,
         )
     print(f"WARNING: Unknown arm '{name}', skipping")
     return None
@@ -211,9 +446,13 @@ def create_arms(
     arm_names: list[str],
     llm_provider,
     embedding_provider,
+    decay_overrides: dict | None = None,
 ) -> list[BenchmarkArm]:
     """Instantiate requested benchmark arms."""
-    arms = [make_arm(n, llm_provider, embedding_provider) for n in arm_names]
+    arms = [
+        make_arm(n, llm_provider, embedding_provider, decay_overrides)
+        for n in arm_names
+    ]
     return [a for a in arms if a is not None]
 
 
@@ -238,6 +477,9 @@ async def evaluate_arm_on_conversation(
     conv: LoCoMoConversation,
     categories: list[int] | None,
     max_questions: int | None = None,
+    store_root: Path | None = None,
+    ingest_every: int = 0,
+    decay_overrides: dict | None = None,
 ) -> list[dict]:
     """Run one arm on one conversation, return per-question results.
 
@@ -250,11 +492,50 @@ async def evaluate_arm_on_conversation(
     Judging is deliberately not done here — it runs as a separate batched
     phase so judge calls can be parallelized independently of answering.
     """
-    arm.reset()
+    # Mid-conversation ingestion checkpointing. Off unless the runner supplies a
+    # store root and an interval, so every existing call path keeps the old
+    # behaviour of wiping and re-ingesting. See scripts/benchmarks/ingest_checkpoint.
+    resume = bool(store_root) and ingest_every > 0 and arm.supports_ingest_resume
+    start_at, on_progress, store_dir = 0, None, None
+    if resume:
+        store_dir = ingest_checkpoint.store_dir_for(store_root, arm.name, conv.sample_id)
+        store_dir.mkdir(parents=True, exist_ok=True)
+        fp = ingest_checkpoint.fingerprint(arm.name, decay_overrides)
+        start_at = arm.prepare_store(str(store_dir), conv.sample_id, fp)
+        if start_at:
+            print(f"    [{arm.name}/{conv.sample_id}] resuming ingestion at "
+                  f"exchange {start_at}")
+
+        def on_progress(done: int, turn: int, _d=store_dir, _c=conv.sample_id,
+                        _f=fp, _n=ingest_every) -> None:
+            if done % _n == 0:
+                ingest_checkpoint.write(
+                    _d,
+                    ingest_checkpoint.IngestState(
+                        conversation_id=_c, exchanges_done=done,
+                        turn=turn, fingerprint=_f,
+                    ),
+                )
+    else:
+        arm.reset()
 
     # Ingest all sessions
     history = conv.get_flat_history()
-    await arm.ingest_conversation(history)
+    beat = asyncio.create_task(
+        _heartbeat(arm, conv.sample_id, total=sum(1 for t in history if t.get("role") == "user"))
+    )
+    try:
+        await arm.ingest_conversation(history, start_at=start_at, on_progress=on_progress)
+    finally:
+        beat.cancel()
+    # Clear only after ingestion completes. A surviving state file over a
+    # finished store would make the next run resume from `exchanges_done` and
+    # re-ingest the tail into a store that already has it, duplicating facts
+    # rather than saving work.
+    if resume:
+        ingest_checkpoint.clear(store_dir)
+    print(f"    [{arm.name}/{conv.sample_id}] ingested, answering "
+          f"{len(conv.qa_pairs)} questions")
 
     results = []
     qa_pairs = conv.qa_pairs
@@ -263,7 +544,18 @@ async def evaluate_arm_on_conversation(
     if max_questions is not None:
         qa_pairs = qa_pairs[:max_questions]
 
+    # Answering is the long phase for the stateless arms -- 1,986 questions run
+    # strictly sequentially within a conversation (see docstring), so without
+    # this the log goes silent for 8-15 minutes at a stretch and there is no way
+    # to tell a slow run from a hung one. Every 25 is frequent enough to show
+    # movement and rare enough not to bury the errors in the same file.
+    answer_start = time.perf_counter()
     for i, qa in enumerate(qa_pairs):
+        if i and i % 25 == 0:
+            mins = (time.perf_counter() - answer_start) / 60
+            eta = mins / i * (len(qa_pairs) - i)
+            print(f"    [{arm.name}/{conv.sample_id}] answered {i}/{len(qa_pairs)}, "
+                  f"{mins:.1f} min elapsed, ~{eta:.1f} min left")
         try:
             response = await arm.answer_question(qa.question)
         except Exception as e:
@@ -299,9 +591,26 @@ async def run_judge_phase(
     judge_provider,
     concurrency: int,
 ) -> None:
-    """Judge every answered question in parallel, updating rows in place."""
-    scorable = [r for r in results if not r.get("error")]
+    """Judge every unjudged answer in parallel, updating rows in place.
+
+    Rows restored from a checkpoint already carry their verdict, so skipping
+    them is what makes `--checkpoint resume` cheap. Without the second clause a
+    resume re-graded every completed arm from scratch: 1,986 answers at judge
+    throughput is ~40 minutes per arm, all of it spent recomputing verdicts
+    already on disk, and all of it charged against the same quota the arms
+    still waiting to run need.
+
+    `is None` rather than a falsy check: `judge_correct=False` is a real
+    verdict ("the judge marked this wrong") and must not be re-run, while None
+    means either never judged or the judge call itself failed -- both worth
+    another attempt.
+    """
+    scorable = [
+        r for r in results
+        if not r.get("error") and r.get("judge_correct") is None
+    ]
     if not scorable:
+        print("    judging: all answers already graded, skipping")
         return
 
     print(f"    judging {len(scorable)} answers (concurrency {concurrency})...")
@@ -316,6 +625,7 @@ async def run_judge_phase(
         ],
         judge_provider=judge_provider,
         concurrency=concurrency,
+        on_progress=lambda done, total: print(f"      judged {done}/{total}"),
     )
     for row, verdict in zip(scorable, verdicts):
         row["judge_correct"] = verdict.correct if verdict is not None else None
@@ -384,12 +694,15 @@ async def run_benchmark(args: argparse.Namespace) -> None:
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    completed = _load_checkpoints(output_dir, arm_names) if args.checkpoint else {}
+    completed, restored_metrics = (
+        _load_checkpoints(output_dir, arm_names) if args.checkpoint else ({}, {})
+    )
 
     all_results: dict[str, BenchmarkResult] = {}
+    decay_overrides = build_decay_overrides(args)
 
     for arm_name in arm_names:
-        template = make_arm(arm_name, llm_provider, embedding_provider)
+        template = make_arm(arm_name, llm_provider, embedding_provider, decay_overrides)
         if template is None:
             continue
 
@@ -406,11 +719,22 @@ async def run_benchmark(args: argparse.Namespace) -> None:
         if all_question_results:
             print(f"  resuming: {len(done_conversations)} conversations already "
                   f"complete, {len(pending)} to go")
+            # Seed the template with the banked cost samples. merge_metrics
+            # later adds this run's workers on top, so the arm ends up
+            # reporting every question it answered, not only the ones answered
+            # after the last restart.
+            banked = restored_metrics.get(template.name) or {}
+            template.metrics._latencies.extend(banked.get("latencies", []))
+            template.metrics._prompt_tokens.extend(banked.get("prompt_tokens", []))
+            template.metrics._completion_tokens.extend(
+                banked.get("completion_tokens", [])
+            )
+            template.metrics._context_tokens.extend(banked.get("context_tokens", []))
 
         # One arm instance per worker slot, reused across conversations.
         n_workers = max(1, min(args.concurrency, len(pending)))
         workers = [
-            make_arm(arm_name, llm_provider, embedding_provider)
+            make_arm(arm_name, llm_provider, embedding_provider, decay_overrides)
             for _ in range(n_workers)
         ]
         queue: asyncio.Queue = asyncio.Queue()
@@ -431,10 +755,28 @@ async def run_benchmark(args: argparse.Namespace) -> None:
                     rows = await evaluate_arm_on_conversation(
                         arm=arm, conv=conv, categories=categories,
                         max_questions=args.max_questions,
+                        store_root=output_dir,
+                        ingest_every=args.ingest_checkpoint_every,
+                        decay_overrides=decay_overrides,
                     )
                 except Exception as exc:  # noqa: BLE001 - one bad conversation
-                    print(f"    ERROR conversation {conv.sample_id}: {exc}")
-                    rows = []
+                    # Do NOT checkpoint a conversation that died. The previous
+                    # version stored rows=[] under its id, which marked it
+                    # *complete with zero questions*: its results vanished from
+                    # the arm, and because _load_checkpoints skips any id it
+                    # finds, a resumed run skipped it forever rather than
+                    # retrying it. A transient network blip at 23:55 took out
+                    # four conversations that way -- 864 of 1,986 questions --
+                    # after two and a half hours of ingestion each.
+                    #
+                    # Leaving it unrecorded means resume treats it as pending,
+                    # which is the correct reading of "we never got an answer".
+                    print(f"    ERROR conversation {conv.sample_id}: "
+                          f"{type(exc).__name__}: {exc} — NOT checkpointed, "
+                          f"will be retried on resume")
+                    async with results_lock:
+                        progress["done"] += 1
+                    continue
 
                 async with results_lock:
                     all_question_results.extend(rows)
@@ -442,7 +784,10 @@ async def run_benchmark(args: argparse.Namespace) -> None:
                     progress["done"] += 1
                     print(f"  [{template.name}] conv {progress['done']}/{len(pending)} "
                           f"({conv.sample_id}) — {len(rows)} answered")
-                    _write_checkpoint(output_dir, template.name, done_conversations)
+                    _write_checkpoint(
+                        output_dir, template.name, done_conversations,
+                        _metrics_snapshot(template, workers),
+                    )
 
         start_arm = time.perf_counter()
         await asyncio.gather(*(worker(i) for i in range(n_workers)))
@@ -454,8 +799,14 @@ async def run_benchmark(args: argparse.Namespace) -> None:
             )
             # Judge verdicts were written into the same row objects the
             # checkpoint holds, so re-dump to persist them.
-            _write_checkpoint(output_dir, template.name, done_conversations)
+            _write_checkpoint(
+                output_dir, template.name, done_conversations,
+                _metrics_snapshot(template, workers),
+            )
 
+        # Must come after the writes above: the snapshot sums template and
+        # workers, and merging folds the workers *into* the template, so a
+        # snapshot taken afterwards would count this run's samples twice.
         merge_metrics(template, workers)
 
         # Aggregate results
@@ -476,12 +827,26 @@ async def run_benchmark(args: argparse.Namespace) -> None:
             "embedding": args.embedding,
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "conversations_evaluated": len(conversations),
+            "questions_evaluated": sum(
+                len(r.question_results) for r in all_results.values()
+            ) // max(1, len(all_results)),
+            # Recorded because it changes the result materially: a paired A/B
+            # measured 2-hop traversal costing 3.5x context for no accuracy
+            # gain, so a reader comparing two results files needs to know which
+            # setting produced each. None means the DecayConfig default.
+            "max_hops": args.max_hops,
+            # Likewise: beta > 0 slows decay for facts in densely interlinked
+            # neighbourhoods, so a run with it on is not comparable to one
+            # without. None means the DecayConfig default, which is 0 (off).
+            "beta": args.beta,
+            "theta": DecayConfig().theta,
+            "judge": (args.judge or args.provider) if not args.skip_judge else None,
         },
         "results": {name: result.to_dict() for name, result in all_results.items()},
     }
 
     results_path = output_dir / "results.json"
-    with open(results_path, "w") as f:
+    with open(results_path, "w", encoding="utf-8") as f:
         json.dump(final_output, f, indent=2)
 
     print(f"\n{'=' * 70}")
@@ -564,7 +929,23 @@ def _print_comparison_table(results: dict[str, BenchmarkResult]) -> None:
 
 def main() -> None:
     args = parse_args()
-    asyncio.run(run_benchmark(args))
+    tee = None
+    if args.log_file:
+        log_path = Path(args.log_file)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        tee = _TeeStream(sys.stdout, log_path)
+        sys.stdout = tee
+        # stderr too: a traceback that only reached the console would be lost
+        # the moment the terminal scrolled, which is exactly the failure a log
+        # file exists to capture.
+        sys.stderr = tee
+        print(f"live log: {log_path.resolve()}")
+    try:
+        asyncio.run(run_benchmark(args))
+    finally:
+        if tee is not None:
+            sys.stdout, sys.stderr = tee._stream, tee._stream
+            tee.close()
 
 
 if __name__ == "__main__":

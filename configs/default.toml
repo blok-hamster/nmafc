@@ -11,7 +11,14 @@ gamma = 0.1
 w_prune = 0.1
 
 [retrieval]
-theta = 0.75
+# Cosine similarity below which Hot RAM counts as holding nothing on-topic and
+# the Cold ROM keyword fallback fires. Derived from the gap between answerable
+# and unanswerable queries measured on two populated LoCoMo stores -- on-topic
+# top-1 lands at 0.40-0.87, off-topic at 0.18-0.48 -- so 0.45 sits between the
+# populations. See the comment on DecayConfig.theta for the full derivation.
+# The old 0.75 predates the search metric being fixed to cosine and fires on
+# ~60% of real questions, which makes the fallback the default path.
+theta = 0.45
 top_k = 10
 fallback_keyword_limit = 20
 

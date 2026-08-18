@@ -10,6 +10,8 @@ and the "Full-conversation" baseline in the Zep paper.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import time
 
 from nmafc.integration.base import LLMProvider
@@ -41,8 +43,17 @@ class RawLLMArm(BenchmarkArm):
         self._history: list[dict] = []
         self._max_chars = max_context_chars
 
-    async def ingest_conversation(self, turns: list[dict]) -> None:
-        """Store conversation turns verbatim."""
+    async def ingest_conversation(
+        self,
+        turns: list[dict],
+        start_at: int = 0,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> None:
+        """Store conversation turns verbatim.
+
+        `start_at` is accepted and ignored -- see `RagArm.ingest_conversation`.
+        There is no store here at all; the history lives in a list.
+        """
         self._history.extend(turns)
 
     async def answer_question(self, question: str) -> ArmResponse:

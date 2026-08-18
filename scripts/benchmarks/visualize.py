@@ -27,7 +27,7 @@ from plotly.subplots import make_subplots
 
 def load_results(path: str) -> dict:
     """Load benchmark results JSON."""
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -218,8 +218,17 @@ def generate_summary_table(results: dict, output_dir: Path) -> None:
         "",
         f"- **Provider:** {metadata.get('provider', 'unknown')}",
         f"- **Embedding:** {metadata.get('embedding', 'unknown')}",
+        f"- **Judge:** {metadata.get('judge', 'unknown')}",
         f"- **Date:** {metadata.get('timestamp', 'unknown')}",
+        f"- **Conversations:** {metadata.get('conversations_evaluated', 'unknown')}",
         f"- **Questions:** {metadata.get('questions_evaluated', 'unknown')}",
+        # Retrieval settings belong on the figure, not only in the runner's
+        # argv: two results files with identical arms can differ by these
+        # alone, and a 2-hop run costs 3.5x the context of a 0-hop one.
+        f"- **Spreading Activation (max_hops):** "
+        f"{metadata.get('max_hops', 'default')}"
+        f"{' — graph traversal disabled' if metadata.get('max_hops') == 0 else ''}",
+        f"- **Retrieval threshold (theta):** {metadata.get('theta', 'unknown')}",
         "",
         "## Results",
         "",
@@ -264,7 +273,9 @@ def generate_summary_table(results: dict, output_dir: Path) -> None:
             lines.append(row)
 
     summary_path = output_dir / "SUMMARY.md"
-    with open(summary_path, "w") as f:
+    # Explicit encoding: Windows defaults to cp1252, which cannot encode the
+    # em dashes in this file and silently writes replacement characters.
+    with open(summary_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
     print(f"  Summary written to: {summary_path}")
 

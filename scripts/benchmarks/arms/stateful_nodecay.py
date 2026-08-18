@@ -13,6 +13,8 @@ active pruning to the final accuracy/cost metrics.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import tempfile
 import time
 from pathlib import Path
@@ -68,10 +70,24 @@ class StatefulNoDecayArm(BenchmarkArm):
             config=config,
         )
 
-    async def ingest_conversation(self, turns: list[dict]) -> None:
-        """Process conversation through the memory wrapper."""
-        for exchange in build_exchanges(turns):
+    async def ingest_conversation(
+        self,
+        turns: list[dict],
+        start_at: int = 0,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> None:
+        """Process conversation through the memory wrapper.
+
+        This arm has a durable store and could support resume, but is left out
+        deliberately: it is the no-decay control, and its value comes from being
+        the one arm nothing has been done to. Resume machinery is a change.
+        """
+        for index, exchange in enumerate(build_exchanges(turns)):
+            if index < start_at:
+                continue
             await self._memory.process_turn(user_msg=exchange)
+            if on_progress is not None:
+                on_progress(index + 1, self._memory.current_turn)
 
     async def answer_question(self, question: str) -> ArmResponse:
         """Answer using neuromorphic retrieval (without decay)."""
