@@ -10,12 +10,14 @@ and the "Full-conversation" baseline in the Zep paper.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import time
 
 from nmafc.integration.base import LLMProvider
 
 from ..evaluation.metrics import ArmResponse
-from .base import BenchmarkArm
+from .base import BenchmarkArm, SHORT_ANSWER_RULES
 
 ANSWER_SYSTEM_PROMPT = (
     "You are a conversational AI assistant with access to the full "
@@ -25,6 +27,7 @@ ANSWER_SYSTEM_PROMPT = (
     "If the answer is not in the history, say \"I don't know\" or "
     "\"This information is not available.\"\n"
     "Be concise — answer in a few words or a short phrase when possible."
+    + SHORT_ANSWER_RULES
 )
 
 CONTEXT_PREFIX = "=== CONVERSATION HISTORY ===\n"
@@ -40,8 +43,17 @@ class RawLLMArm(BenchmarkArm):
         self._history: list[dict] = []
         self._max_chars = max_context_chars
 
-    async def ingest_conversation(self, turns: list[dict]) -> None:
-        """Store conversation turns verbatim."""
+    async def ingest_conversation(
+        self,
+        turns: list[dict],
+        start_at: int = 0,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> None:
+        """Store conversation turns verbatim.
+
+        `start_at` is accepted and ignored -- see `RagArm.ingest_conversation`.
+        There is no store here at all; the history lives in a list.
+        """
         self._history.extend(turns)
 
     async def answer_question(self, question: str) -> ArmResponse:
@@ -76,11 +88,22 @@ class RawLLMArm(BenchmarkArm):
         self._history = []
 
     def _format_history(self) -> str:
-        """Format history as text, truncating from the start if too long."""
+        """Format history as text, truncating from the start if too long.
+
+        Session timestamps are emitted as headers whenever the date changes, so
+        temporal questions ("When did X happen?") are answerable at all, and
+        turns are attributed to real speaker names rather than User/Assistant,
+        since the questions refer to people by name.
+        """
         lines = []
+        current_date = None
         for turn in self._history:
-            role = turn["role"].capitalize()
-            lines.append(f"{role}: {turn['content']}")
+            date = turn.get("date")
+            if date and date != current_date:
+                lines.append(f"\n[Session — {date}]")
+                current_date = date
+            speaker = turn.get("speaker") or turn["role"].capitalize()
+            lines.append(f"{speaker}: {turn['content']}")
 
         full_text = "\n".join(lines)
 

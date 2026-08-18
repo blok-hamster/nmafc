@@ -13,24 +13,28 @@ from __future__ import annotations
 
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from nmafc.integration.base import EmbeddingProvider, LLMProvider
+from nmafc.schemas.memory import DecayConfig
 from nmafc.storage.config import NMafcConfig, StorageConfig
 from nmafc.wrapper import NeuromorphicMemory
 
 from ..evaluation.metrics import ArmResponse
-from .base import BenchmarkArm
+from .base import BenchmarkArm, SHORT_ANSWER_RULES, build_exchanges
 
 ANSWER_SYSTEM_PROMPT = """You are a conversational AI assistant with a neuromorphic memory system.
 Relevant memories from past conversations are provided below, ranked by salience.
 Answer the user's question based ONLY on information from your memories.
 If the answer is not in your memories, say "I don't know" or "This information is not available."
-Be concise — answer in a few words or a short phrase when possible."""
+Be concise — answer in a few words or a short phrase when possible.""" + SHORT_ANSWER_RULES
 
 
 class NeuromorphicArm(BenchmarkArm):
     """Full NMAFC with decay, reinforcement, and pruning active."""
+
+    supports_ingest_resume = True
 
     def __init__(
         self,
@@ -38,23 +42,34 @@ class NeuromorphicArm(BenchmarkArm):
         embedding_provider: EmbeddingProvider,
         config: NMafcConfig | None = None,
         storage_dir: str | None = None,
+        decay_overrides: dict | None = None,
     ) -> None:
         super().__init__(name="neuromorphic")
         self._llm = llm_provider
         self._embedder = embedding_provider
         self._storage_dir = storage_dir or tempfile.mkdtemp(prefix="nmafc_bench_neuro_")
+        self._decay_overrides = decay_overrides or {}
         self._config = config
         self._memory: NeuromorphicMemory = None  # type: ignore[assignment]
         self._init_memory()
 
     def _init_memory(self) -> None:
-        """Initialize NeuromorphicMemory with production config."""
+        """Initialize NeuromorphicMemory with production config.
+
+        `decay_overrides` carries run-level DecayConfig settings the runner
+        applies identically to every neuromorphic arm (max_hops, beta). They are
+        properties of the run, not of this arm, which is why they arrive as a
+        dict rather than as a growing list of keyword arguments. Anything absent
+        keeps its DecayConfig default.
+        """
         if self._config is None:
+            decay = DecayConfig(**self._decay_overrides)
             self._config = NMafcConfig(
                 storage=StorageConfig(
                     hot_uri=str(Path(self._storage_dir) / "hot_lancedb"),
                     cold_uri=str(Path(self._storage_dir) / "cold.db"),
                 ),
+                decay=decay,
             )
         else:
             self._config.storage.hot_uri = str(Path(self._storage_dir) / "hot_lancedb")
@@ -66,14 +81,43 @@ class NeuromorphicArm(BenchmarkArm):
             config=self._config,
         )
 
-    async def ingest_conversation(self, turns: list[dict]) -> None:
+    def prepare_store(
+        self, store_dir: str, conversation_id: str, fingerprint: str
+    ) -> int:
+        """Reopen a matching half-built store, or start this conversation over.
+
+        See `NeuromorphicTunedArm.prepare_store` for why `_current_turn` has to
+        be restored along with the data.
+        """
+        from scripts.benchmarks import ingest_checkpoint
+
+        target = Path(store_dir)
+        state = ingest_checkpoint.read(target, conversation_id, fingerprint)
+        if state is None:
+            self._storage_dir = str(target)
+            self.reset()
+            return 0
+
+        if self._memory:
+            self._memory.close()
+        self._storage_dir = str(target)
+        self._init_memory()
+        self._memory._current_turn = state.turn
+        return state.exchanges_done
+
+    async def ingest_conversation(
+        self,
+        turns: list[dict],
+        start_at: int = 0,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> None:
         """Process conversation through the full neuromorphic pipeline."""
-        for turn in turns:
-            if turn["role"] == "user":
-                await self._memory.process_turn(
-                    user_msg=turn["content"],
-                    conversation_history=[turn],
-                )
+        for index, exchange in enumerate(build_exchanges(turns)):
+            if index < start_at:
+                continue
+            await self._memory.process_turn(user_msg=exchange)
+            if on_progress is not None:
+                on_progress(index + 1, self._memory.current_turn)
 
     async def answer_question(self, question: str) -> ArmResponse:
         """Answer using neuromorphic retrieval with full decay/pruning."""

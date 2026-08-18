@@ -21,6 +21,8 @@ data/
 # Benchmark results and checkpoints
 scripts/benchmarks/results/
 checkpoint_*.json
+# Run logs (--log-file), hundreds of KB per run and reproducible from a rerun
+logs/
 
 # OS files
 .DS_Store

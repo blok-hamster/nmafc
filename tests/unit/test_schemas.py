@@ -157,7 +157,7 @@ class TestDecayConfig:
         assert config.eta == 0.15
         assert config.gamma == 0.1
         assert config.w_prune == 0.1
-        assert config.theta == 0.75
+        assert config.theta == 0.45
         assert config.top_k == 10
 
     def test_get_lambda_base(self):

@@ -19,7 +19,12 @@ class ColdStorageBase(ABC):
     _conversation_id: str
 
     @abstractmethod
-    def append_event(self, update: MemoryStateUpdate, turn: int) -> int: ...
+    def append_event(
+        self,
+        update: MemoryStateUpdate,
+        turn: int,
+        embedding: list[float] | None = None,
+    ) -> int: ...
 
     @abstractmethod
     def mark_inactive(self, event_id: int) -> None: ...
@@ -32,6 +37,21 @@ class ColdStorageBase(ABC):
 
     @abstractmethod
     def keyword_search(self, query: str, limit: int = 20) -> list[dict[str, Any]]: ...
+
+    # Dense retrieval and graph expansion over the archive. Deliberately not
+    # abstract: a backend that has not implemented them stays usable and simply
+    # degrades to keyword-only fallback, which is the behaviour every backend
+    # had before these existed. Overriding implementations should add a `score`
+    # key to each row returned by semantic_search.
+    def semantic_search(
+        self, query_embedding: list[float], limit: int = 20
+    ) -> list[dict[str, Any]]:
+        return []
+
+    def get_events_for_entities(
+        self, entity_names: list[str], limit: int = 50
+    ) -> list[dict[str, Any]]:
+        return []
 
     @abstractmethod
     def count_active(self) -> int: ...

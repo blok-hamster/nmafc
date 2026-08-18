@@ -31,7 +31,15 @@ class StorageConfig(BaseModel):
             "postgresql:// DSN for remote PostgreSQL."
         ),
     )
-    embedding_dim: int = Field(default=1536, gt=0)
+    embedding_dim: int = Field(
+        default_factory=lambda: int(os.environ.get("NMAFC_EMBEDDING_DIM", "1536")),
+        gt=0,
+        description=(
+            "Vector width of the hot-storage column. Defaults from "
+            "NMAFC_EMBEDDING_DIM so callers that build StorageConfig directly "
+            "still match the configured embedding model."
+        ),
+    )
     embedding_model: str = Field(default="text-embedding-3-small")
     agent_id: str = Field(
         default="default",
@@ -105,5 +113,7 @@ class NMafcConfig(BaseModel):
             config.llm_provider_model = llm
         if emb := os.environ.get("NMAFC_EMBEDDING_PROVIDER_MODEL"):
             config.embedding_provider_model = emb
+        if dim := os.environ.get("NMAFC_EMBEDDING_DIM"):
+            config.storage.embedding_dim = int(dim)
 
         return config

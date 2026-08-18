@@ -66,7 +66,22 @@ class PostgresColdStorage(ColdStorageBase):
             """)
         self._conn.commit()
 
-    def append_event(self, update: MemoryStateUpdate, turn: int) -> int:
+    def append_event(
+        self,
+        update: MemoryStateUpdate,
+        turn: int,
+        embedding: list[float] | None = None,
+    ) -> int:
+        """Append one immutable event.
+
+        `embedding` is accepted for interface parity with the SQLite backend and
+        currently discarded: dense retrieval over the archive needs a vector
+        column, and adding one here means requiring the pgvector extension,
+        which is a deployment decision rather than a code change. Until then
+        this backend inherits ColdStorageBase.semantic_search, which returns
+        nothing, so the router falls back to keyword search alone -- the
+        behaviour every backend had before dense fallback existed.
+        """
         with self._conn.cursor() as cur:
             cur.execute(
                 """INSERT INTO memory_event_log

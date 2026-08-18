@@ -16,6 +16,7 @@ Usage:
     embedder = create_embedding_provider("ollama/nomic-embed-text")
     embedder = create_embedding_provider("azure/my-embedding-deployment")
     embedder = create_embedding_provider("bedrock/amazon.titan-embed-text-v2:0")
+    embedder = create_embedding_provider("fastembed/BAAI/bge-small-en-v1.5")
 """
 
 from __future__ import annotations
@@ -38,6 +39,11 @@ PROVIDER_BASE_URLS: dict[str, str] = {
     "ollama": os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
     "lmstudio": os.environ.get("LMSTUDIO_BASE_URL", "http://localhost:1234/v1"),
     "vllm": os.environ.get("VLLM_BASE_URL", "http://localhost:8000/v1"),
+    # Azure AI Foundry's OpenAI-compatible "/openai/v1" route. Unlike the
+    # "azure/" prefix (deployment-based routing via AsyncAzureOpenAI), this
+    # treats the endpoint as a plain OpenAI-compatible base URL, which is what
+    # Foundry serverless deployments expose. Endpoint and key come from env.
+    "azure_v1": os.environ.get("AZURE_OPENAI_ENDPOINT", ""),
 }
 
 PROVIDER_API_KEY_ENV: dict[str, str] = {
@@ -47,6 +53,7 @@ PROVIDER_API_KEY_ENV: dict[str, str] = {
     "together": "TOGETHER_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
     "azure": "AZURE_OPENAI_API_KEY",
+    "azure_v1": "AZURE_OPENAI_API_KEY",
     "bedrock": "",
     "ollama": "",
     "lmstudio": "",
@@ -201,6 +208,11 @@ def create_embedding_provider(
             "AWS_REGION", "us-east-1"
         )
         return BedrockEmbedding(model_id=model, region=region, **kwargs)
+
+    if provider == "fastembed":
+        from nmafc.integration.fastembed_provider import FastEmbedProvider
+
+        return FastEmbedProvider(model_name=model, **kwargs)
 
     resolved_url = base_url or PROVIDER_BASE_URLS.get(provider)
 

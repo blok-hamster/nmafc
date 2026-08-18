@@ -89,8 +89,16 @@ class HotStorage:
         self._table.add([row])
 
     def search(self, query_embedding: list[float], top_k: int = 10) -> list[SearchResult]:
+        # Cosine, not the LanceDB default of L2. `score` below is consumed as a
+        # similarity in [0, 1] and compared against DecayConfig.theta, and only
+        # cosine distance gives that: it is 1 - cos_sim, so 1 - distance is the
+        # cosine similarity itself. Under (squared) L2 the same arithmetic is
+        # meaningless -- unit-norm embedding pairs land at distance 1.4-1.6, so
+        # 1 - distance clamps to 0.0 for every hit and no threshold above zero
+        # is ever reachable.
         results = (
             self._table.search(query_embedding)
+            .distance_type("cosine")
             .where(self._scope_filter)
             .limit(top_k)
             .to_list()
@@ -134,6 +142,59 @@ class HotStorage:
         self.delete(record_id)
         self._table.add([row])
 
+    def apply_weight_updates(
+        self, updates: list[tuple[str, float]], decay_turn: int | None = None
+    ) -> None:
+        """Apply many weight changes in a single delete + add.
+
+        Semantically identical to calling update_weight() in a loop, but the
+        per-record version costs a scan, a delete and an add *each*. The decay
+        pass rewrites every mutable record every turn, so that made per-turn
+        cost grow linearly with stored memories — quadratic over a
+        conversation, and the dominant cost of ingestion.
+
+        `decay_turn` advances the decay clock alongside the weight, and callers
+        applying a decay pass must pass it. decay_record() reads the stored
+        weight as w0 and multiplies by e^{-lambda * (current_turn -
+        last_reinforced_turn)}. Writing the decayed weight back without moving
+        last_reinforced_turn leaves an already-decayed value sitting in the w0
+        slot while the elapsed term keeps growing, so turn n applies n turns of
+        decay to a weight that has already absorbed n-1 of them. Over a
+        conversation that compounds to w0 * e^{-lambda*n(n+1)/2} rather than
+        w0 * e^{-lambda*n}: at lambda = 0.05 an ActiveContext record reaches the
+        0.1 prune threshold at turn 10 instead of turn 46, and an EphemeralState
+        record at turn 3 instead of turn 5.
+
+        The weight is still carried forward rather than recomputed from 1.0,
+        because suppression (pruning.apply_suppression) multiplies the stored
+        weight by gamma when a newer fact contradicts an older one. Restarting
+        decay from 1.0 would erase that penalty on the next pass.
+        """
+        if not updates:
+            return
+
+        weights = dict(updates)  # last write wins, as in the sequential loop
+        quoted = ", ".join(f"'{record_id}'" for record_id in weights)
+        rows = self._table.search().where(f"id IN ({quoted})").limit(10000).to_list()
+        if not rows:
+            return
+
+        for row in rows:
+            row.pop("_distance", None)
+            row["weight"] = weights[row["id"]]
+            if decay_turn is not None:
+                row["last_reinforced_turn"] = decay_turn
+
+        self._table.delete(f"id IN ({quoted})")
+        self._table.add(rows)
+
+    def delete_many(self, record_ids: list[str]) -> None:
+        """Delete several records in one predicate instead of one call each."""
+        if not record_ids:
+            return
+        quoted = ", ".join(f"'{record_id}'" for record_id in set(record_ids))
+        self._table.delete(f"id IN ({quoted})")
+
     def update_reinforcement(self, record_id: str, new_k: int, turn: int) -> None:
         results = self._table.search().where(f"id = '{record_id}'").limit(1).to_list()
         if not results:
@@ -145,6 +206,35 @@ class HotStorage:
         row.pop("_distance", None)
         self.delete(record_id)
         self._table.add([row])
+
+    def apply_reinforcements(
+        self, updates: list[tuple[str, int]], turn: int
+    ) -> None:
+        """Apply many LTP reinforcements in a single delete + add.
+
+        Semantically identical to calling update_reinforcement() in a loop, and
+        the same optimisation apply_weight_updates() makes for the decay pass.
+        Retrieval reinforces every record that Spreading Activation surfaces,
+        which after two hops is routinely dozens per question, so the per-record
+        version made a single answer cost dozens of table rewrites.
+        """
+        if not updates:
+            return
+
+        new_ks = dict(updates)  # last write wins, as in the sequential loop
+        quoted = ", ".join(f"'{record_id}'" for record_id in new_ks)
+        rows = self._table.search().where(f"id IN ({quoted})").limit(10000).to_list()
+        if not rows:
+            return
+
+        for row in rows:
+            row.pop("_distance", None)
+            row["weight"] = 1.0
+            row["consolidation_index"] = new_ks[row["id"]]
+            row["last_reinforced_turn"] = turn
+
+        self._table.delete(f"id IN ({quoted})")
+        self._table.add(rows)
 
     def delete(self, record_id: str) -> None:
         self._table.delete(f"id = '{record_id}'")
