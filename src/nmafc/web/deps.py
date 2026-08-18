@@ -40,7 +40,6 @@ def get_memory(agent_id: str = "default", conversation_id: str = "default") -> N
             update={"agent_id": agent_id, "conversation_id": conversation_id}
         ),
         decay=_BASE_CONFIG.decay,
-        retrieval=_BASE_CONFIG.retrieval,
         llm_provider_model=_BASE_CONFIG.llm_provider_model,
         embedding_provider_model=_BASE_CONFIG.embedding_provider_model,
     )
