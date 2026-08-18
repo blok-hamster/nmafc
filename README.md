@@ -156,16 +156,22 @@ pip install nmafc[aws]
 # With PostgreSQL remote storage
 pip install nmafc[postgres]
 
+# With Web UI (FastAPI + Next.js frontend)
+pip install nmafc[web]
+
+# With CLI tools (nmafc start/init/chat)
+pip install nmafc[cli]
+
 # With benchmark suite
 pip install nmafc[bench]
 
-# Everything (LLM + AWS + Postgres + Benchmarks)
+# Everything (LLM + AWS + Postgres + Web + CLI + Benchmarks)
 pip install nmafc[all]
 
 # Development (from source)
 git clone https://github.com/blok-hamster/nmafc.git
 cd nmafc
-uv pip install -e ".[all]"
+uv pip install -e ".[all,cli]"
 uv pip install --group dev
 ```
 
@@ -270,6 +276,175 @@ await mem.ingest_updates([
 # Restore memory state to how it was at turn 10
 restored_count = await mem.rollback(to_turn=10)
 print(f"Restored {restored_count} records from Cold ROM")
+```
+
+## Web UI
+
+NMAFC ships with a full-stack visual memory explorer. The backend is a FastAPI server exposing 27 REST endpoints + 1 WebSocket; the frontend is a Next.js dashboard with live updates.
+
+### Pages
+
+| Page | Description |
+|------|-------------|
+| **Dashboard** | Overview stats, hot RAM weight distribution, tier breakdown, recent events |
+| **Memory Explorer** | Search records, filter by tier, view decay info, drill into entities |
+| **Entity Graph** | D3 force-directed graph of entities and `related_entities` links |
+| **Decay Curves** | Recharts projection of every record's weight over 200 turns |
+| **Event Timeline** | Stacked bar chart of cognitive events (overrides, prunes, LTP, etc.) |
+| **Documentation** | Full in-app docs (no external README needed) |
+
+### Running the Web UI
+
+```bash
+# Start Ollama (for local embeddings)
+ollama serve &
+ollama pull nomic-embed-text
+
+# Start backend + frontend together
+nmafc start
+
+# Custom port
+nmafc start --port 9000
+
+# Production mode (builds frontend, single port)
+nmafc start --production
+
+# Open http://localhost:3000
+```
+
+The Next.js frontend proxies `/api/*` and `/ws/*` requests to the backend — zero frontend config needed. Just start both and open port 3000.
+
+### WebSocket Live Updates
+
+The frontend connects to `/ws/live` and receives real-time broadcasts:
+
+```json
+{
+  "type": "turn_processed",
+  "turn": 42,
+  "extracted_count": 3,
+  "hot_count": 187,
+  "cold_count": 843,
+  "pruned_count": 2,
+  "ts": "2026-08-18T12:00:00Z"
+}
+```
+
+## CLI Reference
+
+NMAFC provides a unified CLI for setup, development, and interactive chat.
+
+### nmafc init
+
+Interactive setup wizard — asks for LLM provider, embedding model, API keys, and storage paths. Generates `.env` and `configs/custom.toml`.
+
+```bash
+nmafc init
+```
+
+### nmafc start
+
+Starts the FastAPI backend + Next.js frontend as subprocesses. Handles SIGINT for graceful shutdown.
+
+```bash
+# Dev mode: backend :8000, frontend :3000
+nmafc start
+
+# Custom port + config
+nmafc start --port 9000 --config configs/custom.toml
+
+# Production: build frontend, serve from one port
+nmafc start --production
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--port` | 8000 | Backend port |
+| `--host` | 0.0.0.0 | Bind address |
+| `--config` | configs/default.toml | Config TOML path |
+| `--production` | off | Build frontend, serve from one port |
+
+### nmafc chat
+
+Terminal REPL — processes messages through the full neuromorphic pipeline. No web UI required.
+
+```bash
+nmafc chat
+nmafc chat --llm "groq/llama-3.1-70b-versatile"
+nmafc chat --config configs/custom.toml
+```
+
+| Command | Description |
+|---------|-------------|
+| `/stats` | Show system stats (records, weights, events) |
+| `/memory` | List all Hot RAM records |
+| `/events` | Show recent cognitive events |
+| `/rollback N` | Restore memory to turn N |
+| `/quit` | Exit the chat |
+
+## Library Integration
+
+### Context Manager (async)
+
+`NeuromorphicMemory` supports `async with` for automatic resource cleanup:
+
+```python
+import asyncio
+from nmafc.wrapper import NeuromorphicMemory
+
+async def main():
+    async with await NeuromorphicMemory.from_config() as mem:
+        response = await mem.process_turn("My name is Alice")
+        print(response)
+        print(mem.get_hot_stats())
+
+asyncio.run(main())
+```
+
+### Sync Wrapper (no async needed)
+
+`SyncNeuromorphicMemory` wraps the async API with `asyncio.run()` and supports `with`:
+
+```python
+from nmafc.wrapper import SyncNeuromorphicMemory
+
+with SyncNeuromorphicMemory.from_config() as mem:
+    response = mem.process_turn_sync("Hello world")
+    print(response)
+    print(mem.get_hot_stats())
+```
+
+### Available Methods
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `process_turn(msg)` | `str` | Full pipeline: retrieve + respond + extract + decay |
+| `ingest_updates(updates)` | `None` | Inject facts without LLM call |
+| `consolidate()` | `int` | Manual REM sleep pass |
+| `rollback(to_turn)` | `int` | Rebuild state from Cold ROM |
+| `get_hot_stats()` | `dict` | Record count, avg weight, type breakdown |
+| `get_cold_stats()` | `dict` | Archive event counts |
+| `get_event_stats()` | `dict` | Cognitive event counts by type |
+| `get_events(**kwargs)` | `list` | Query events with filters |
+| `get_event_timeline(limit)` | `list` | Aggregated counts per turn |
+| `get_entity_events(name)` | `list` | Events for one entity |
+| `current_turn` | `int` | Current turn counter (property) |
+| `close()` | `None` | Close storage connections |
+
+## Examples
+
+```bash
+# Minimal hello-world (10 lines)
+python examples/minimal.py
+
+# Manual memory injection (no LLM needed)
+python examples/manual_ingestion.py
+
+# Custom LLM + embedding providers
+python examples/custom_provider.py
+
+# Non-async usage with SyncNeuromorphicMemory
+python examples/sync_usage.py
 ```
 
 ## Configuration
@@ -1185,9 +1360,11 @@ if k_i >= 10 AND tau_i == ActiveContext:
 ```
 nmafc/
 ├── src/nmafc/
-│   ├── wrapper.py                 # Top-level NeuromorphicMemory class
+│   ├── wrapper.py                 # Top-level NeuromorphicMemory class (async + context manager)
+│   ├── cli.py                     # Unified CLI (nmafc start/init/chat)
 │   ├── schemas/
-│   │   └── memory.py              # Pydantic models (MemoryRecord, DecayConfig, etc.)
+│   │   ├── memory.py              # Pydantic models (MemoryRecord, DecayConfig, etc.)
+│   │   └── events.py              # EventType enum + MemoryEvent model
 │   ├── engine/
 │   │   ├── decay.py               # Ebbinghaus exponential decay
 │   │   ├── reinforcement.py       # LTP (weight reset + k increment)
@@ -1204,32 +1381,67 @@ nmafc/
 │   │   ├── bedrock_provider.py    # AWS Bedrock (boto3 + Anthropic SDK)
 │   │   ├── azure_provider.py      # Azure OpenAI
 │   │   └── fastembed_provider.py  # ONNX CPU embeddings
-│   └── storage/
-│       ├── config.py              # NMafcConfig + TOML parsing
-│       ├── hot.py                 # HotStorage (LanceDB, supports S3)
-│       ├── cold_base.py           # Abstract ColdStorageBase interface
-│       ├── cold.py                # ColdStorage (SQLite + FTS5)
-│       └── cold_pg.py             # PostgresColdStorage (PostgreSQL + tsvector)
+│   ├── storage/
+│   │   ├── config.py              # NMafcConfig + TOML parsing
+│   │   ├── hot.py                 # HotStorage (LanceDB, supports S3)
+│   │   ├── cold_base.py           # Abstract ColdStorageBase interface
+│   │   ├── cold.py                # ColdStorage (SQLite + FTS5)
+│   │   ├── cold_pg.py             # PostgresColdStorage (PostgreSQL + tsvector)
+│   │   └── event_log.py           # SQLite-backed cognitive event log
+│   └── web/
+│       ├── app.py                 # FastAPI app factory + lifespan + dotenv
+│       ├── deps.py                # Dependency injection
+│       ├── ws.py                  # WebSocket ConnectionManager
+│       └── routes/
+│           ├── memory.py          # Memory explorer endpoints
+│           ├── graph.py           # Entity graph endpoints
+│           ├── events.py          # Event log endpoints
+│           ├── decay.py           # Decay curve endpoints
+│           ├── config.py          # Config endpoints
+│           └── process.py         # Process/ingest/rollback endpoints
+├── web-ui/                        # Next.js frontend
+│   ├── src/
+│   │   ├── app/
+│   │   │   ├── layout.tsx         # Root layout with Sidebar + WebSocketProvider
+│   │   │   ├── page.tsx           # Dashboard
+│   │   │   ├── memory/page.tsx    # Memory Explorer
+│   │   │   ├── graph/page.tsx     # Entity Graph (D3 force-directed)
+│   │   │   ├── decay/page.tsx     # Decay Curves (Recharts)
+│   │   │   ├── events/page.tsx    # Event Timeline
+│   │   │   └── docs/page.tsx      # In-app documentation
+│   │   ├── components/layout/
+│   │   │   ├── Sidebar.tsx        # Navigation sidebar
+│   │   │   └── WebSocketProvider.tsx  # WS context provider
+│   │   ├── hooks/useWebSocket.ts  # WebSocket hook
+│   │   └── lib/
+│   │       ├── types.ts           # TypeScript types mirroring Pydantic models
+│   │       └── api.ts             # API client (relative paths, proxy-friendly)
+│   └── next.config.ts             # API proxy rewrites (/api/*, /ws/*)
+├── examples/
+│   ├── minimal.py                 # 10-line hello world
+│   ├── custom_provider.py         # Implement LLMProvider + EmbeddingProvider
+│   ├── manual_ingestion.py        # Bootstrap memory without LLM
+│   └── sync_usage.py              # Non-async usage with SyncNeuromorphicMemory
 ├── configs/
 │   └── default.toml               # Default configuration
-├── scripts/benchmarks/             # Academic benchmark suite
-│   ├── datasets/                   # LoCoMo + LongMemEval loaders
-│   ├── arms/                       # 4 benchmark conditions
+├── scripts/benchmarks/            # Academic benchmark suite
+│   ├── datasets/                  # LoCoMo + LongMemEval loaders
+│   ├── arms/                      # 4 benchmark conditions
 │   │   ├── base.py                # Shared answer-format rules + build_exchanges()
 │   │   ├── raw_llm.py             # Baseline: full transcript in context
 │   │   ├── rag.py                 # Chunked retrieval baseline
 │   │   ├── stateful_nodecay.py    # Retired control: decay/pruning off
 │   │   ├── neuromorphic.py        # Full NMAFC, published defaults
 │   │   └── neuromorphic_tuned.py  # Same, lambda_active_context = 0.005
-│   ├── evaluation/                 # F1 + LLM-as-judge metrics
+│   ├── evaluation/                # F1 + LLM-as-judge metrics
 │   ├── resilience.py              # Rate limiter + retry/backoff wrappers
 │   ├── live_progress.py           # Appends progress lines during long runs
 │   ├── run_locomo.py              # LoCoMo CLI runner (parallel + checkpointed)
 │   ├── run_longmemeval.py         # LongMemEval CLI runner
 │   └── visualize.py               # Publication-ready Plotly charts
-├── tests/                          # pytest suite (unit + integration)
-├── .env.example                    # All provider credential variables
-└── pyproject.toml                  # Package metadata + dependencies
+├── tests/                         # pytest suite (unit + integration)
+├── .env.example                   # All provider credential variables
+└── pyproject.toml                 # Package metadata + dependencies
 ```
 
 ## Testing

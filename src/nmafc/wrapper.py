@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 
 from nmafc.engine.consolidation import MemoryConsolidator
 from nmafc.engine.decay import build_entity_graph, decay_all
-from nmafc.engine.pruning import apply_suppression, detect_override, prune_cycle
+from nmafc.engine.pruning import apply_suppression, create_suppression_event, detect_override, prune_cycle
 from nmafc.integration.base import EmbeddingProvider, LLMProvider
 from nmafc.integration.extractor import StateExtractor
 from nmafc.integration.query_router import QueryRouter
+from nmafc.schemas.events import EventType, MemoryEvent
 from nmafc.schemas.memory import DecayConfig, MemoryRecord, MemoryStateUpdate, UnifiedMemoryPayload
 from nmafc.storage.cold_base import ColdStorageBase
 from nmafc.storage.config import NMafcConfig
+from nmafc.storage.event_log import EventLog
 from nmafc.storage.hot import HotStorage
 
 # Seconds to wait on the embedding-dimension probe before falling back to the
@@ -95,6 +98,11 @@ class NeuromorphicMemory:
         self._consolidator = MemoryConsolidator(
             self._hot, self._cold, self._decay_config
         )
+        self._event_log = EventLog(
+            config.storage.event_log_uri,
+            agent_id=config.storage.agent_id,
+            conversation_id=config.storage.conversation_id,
+        )
 
     @classmethod
     def from_config(
@@ -142,7 +150,9 @@ class NeuromorphicMemory:
         self._current_turn += 1
         history = conversation_history or []
 
-        retrieved = await self._router.retrieve(user_msg, self._current_turn)
+        retrieved = await self._router.retrieve(
+            user_msg, self._current_turn, event_logger=self._event_log
+        )
         memory_context = self._router.format_context(retrieved)
 
         response_text, payload = await self._extractor.extract(
@@ -155,11 +165,16 @@ class NeuromorphicMemory:
 
         self._run_decay()
 
-        prune_cycle(self._hot, self._cold, self._decay_config.w_prune, self._current_turn)
+        prune_cycle(
+            self._hot, self._cold, self._decay_config.w_prune,
+            self._current_turn, event_logger=self._event_log,
+        )
 
         auto_interval = getattr(self._decay_config, "auto_consolidate_turns", 5)
         if auto_interval > 0 and self._current_turn % auto_interval == 0:
-            self._consolidator.consolidate(self._current_turn)
+            self._consolidator.consolidate(
+                self._current_turn, event_logger=self._event_log,
+            )
 
         return response_text
 
@@ -171,15 +186,22 @@ class NeuromorphicMemory:
         self._current_turn += 1
         await self._process_updates(UnifiedMemoryPayload(updates=updates))
         self._run_decay()
-        prune_cycle(self._hot, self._cold, self._decay_config.w_prune, self._current_turn)
+        prune_cycle(
+            self._hot, self._cold, self._decay_config.w_prune,
+            self._current_turn, event_logger=self._event_log,
+        )
 
         auto_interval = getattr(self._decay_config, "auto_consolidate_turns", 5)
         if auto_interval > 0 and self._current_turn % auto_interval == 0:
-            self._consolidator.consolidate(self._current_turn)
+            self._consolidator.consolidate(
+                self._current_turn, event_logger=self._event_log,
+            )
 
     async def consolidate(self) -> int:
         """Manually invoke REM sleep consolidation pass over Hot RAM."""
-        return self._consolidator.consolidate(self._current_turn)
+        return self._consolidator.consolidate(
+            self._current_turn, event_logger=self._event_log,
+        )
 
     async def _process_updates(self, payload: UnifiedMemoryPayload) -> None:
         """Process extracted memory updates: log, suppress overrides, upsert."""
@@ -223,6 +245,13 @@ class NeuromorphicMemory:
             for old_record in overrides:
                 suppressed = apply_suppression(old_record, self._decay_config.gamma)
                 self._hot.update_weight(old_record.id, suppressed.weight)
+                self._event_log.log(
+                    create_suppression_event(
+                        old_record, suppressed.weight,
+                        suppressed_by=update.entity_name,
+                        turn=self._current_turn,
+                    )
+                )
 
             record = MemoryRecord(
                 entity_name=update.entity_name,
@@ -251,7 +280,8 @@ class NeuromorphicMemory:
         )
 
         weight_updates = decay_all(
-            mutable, self._current_turn, self._decay_config, graph
+            mutable, self._current_turn, self._decay_config, graph,
+            event_logger=self._event_log,
         )
         # decay_turn moves the clock forward with the weight, so the next pass
         # decays the stored value by one turn rather than by the whole elapsed
@@ -305,8 +335,127 @@ class NeuromorphicMemory:
             "active_events": self._cold.count_active(),
         }
 
+    def get_event_stats(self) -> dict:
+        """Get statistics about the cognitive event log."""
+        return {
+            "total_events": self._event_log.count(),
+            "by_type": self._event_log.count_by_type(),
+        }
+
+    def get_events(self, **kwargs) -> list:
+        """Query cognitive events with flexible filters.
+
+        Keyword args: turn_from, turn_to, event_types, entity_name,
+        record_id, limit, offset.
+        """
+        return self._event_log.query(**kwargs)
+
+    def get_event_timeline(self, limit: int = 100) -> list[dict]:
+        """Aggregated event counts per turn, grouped by event type."""
+        return self._event_log.get_timeline(limit=limit)
+
+    def get_entity_events(self, entity_name: str, limit: int = 50) -> list:
+        """All cognitive events for a specific entity."""
+        return self._event_log.get_entity_history(entity_name, limit=limit)
+
     def close(self) -> None:
         """Close storage resources and connections."""
+        self._event_log.close()
         self._cold.close()
+
+    async def __aenter__(self) -> NeuromorphicMemory:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        self.close()
+
+    def __enter__(self) -> NeuromorphicMemory:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+
+class SyncNeuromorphicMemory:
+    """Synchronous wrapper around NeuromorphicMemory for non-async code.
+
+    Wraps every async method with asyncio.run() so callers don't need
+    an event loop. Suitable for scripts, notebooks, and CLI tools.
+    """
+
+    def __init__(self, memory: NeuromorphicMemory) -> None:
+        self._memory = memory
+
+    @classmethod
+    def from_config(
+        cls,
+        config: NMafcConfig | None = None,
+        config_path: str | Path = "configs/default.toml",
+    ) -> SyncNeuromorphicMemory:
+        mem = NeuromorphicMemory.from_config(config=config, config_path=config_path)
+        return cls(mem)
+
+    @classmethod
+    def from_providers(
+        cls,
+        llm_provider: LLMProvider,
+        embedding_provider: EmbeddingProvider,
+        config: NMafcConfig | None = None,
+        config_path: str | Path = "configs/default.toml",
+    ) -> SyncNeuromorphicMemory:
+        mem = NeuromorphicMemory(
+            llm_provider=llm_provider,
+            embedding_provider=embedding_provider,
+            config=config,
+            config_path=config_path,
+        )
+        return cls(mem)
+
+    @property
+    def current_turn(self) -> int:
+        return self._memory.current_turn
+
+    def process_turn_sync(
+        self,
+        user_msg: str,
+        conversation_history: list[dict] | None = None,
+    ) -> str:
+        return asyncio.run(self._memory.process_turn(user_msg, conversation_history))
+
+    def ingest_updates_sync(self, updates: list[MemoryStateUpdate]) -> None:
+        asyncio.run(self._memory.ingest_updates(updates))
+
+    def consolidate_sync(self) -> int:
+        return asyncio.run(self._memory.consolidate())
+
+    def rollback_sync(self, to_turn: int) -> int:
+        return asyncio.run(self._memory.rollback(to_turn))
+
+    def get_hot_stats(self) -> dict:
+        return self._memory.get_hot_stats()
+
+    def get_cold_stats(self) -> dict:
+        return self._memory.get_cold_stats()
+
+    def get_event_stats(self) -> dict:
+        return self._memory.get_event_stats()
+
+    def get_events(self, **kwargs) -> list:
+        return self._memory.get_events(**kwargs)
+
+    def get_event_timeline(self, limit: int = 100) -> list[dict]:
+        return self._memory.get_event_timeline(limit=limit)
+
+    def get_entity_events(self, entity_name: str, limit: int = 50) -> list:
+        return self._memory.get_entity_events(entity_name, limit=limit)
+
+    def close(self) -> None:
+        self._memory.close()
+
+    def __enter__(self) -> SyncNeuromorphicMemory:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
 

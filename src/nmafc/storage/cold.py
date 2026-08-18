@@ -38,7 +38,7 @@ class ColdStorage(ColdStorageBase):
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._agent_id = agent_id
         self._conversation_id = conversation_id
-        self._conn = sqlite3.connect(db_path)
+        self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._create_tables()
@@ -141,8 +141,8 @@ class ColdStorage(ColdStorageBase):
 
     def mark_inactive(self, event_id: int) -> None:
         self._conn.execute(
-            "UPDATE memory_event_log SET is_active = 0 WHERE id = ?",
-            (event_id,),
+            "UPDATE memory_event_log SET is_active = 0 WHERE id = ? AND agent_id = ? AND conversation_id = ?",
+            (event_id, self._agent_id, self._conversation_id),
         )
         self._conn.commit()
         # The vector matrix only holds active rows, so retiring one invalidates
