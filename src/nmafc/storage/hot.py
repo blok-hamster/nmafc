@@ -253,7 +253,8 @@ class HotStorage:
         return [self._row_to_record(r) for r in results]
 
     def count(self) -> int:
-        return self._table.count_rows()
+        results = self._table.search().where(self._scope_filter).to_list()
+        return len(results)
 
     def clear(self) -> None:
         """Remove all records scoped to this agent + conversation."""

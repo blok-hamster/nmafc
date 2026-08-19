@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
 
 from nmafc.engine.reinforcement import reinforce
 from nmafc.integration.base import EmbeddingProvider
 from nmafc.schemas.memory import DecayConfig, MemoryRecord, MemoryType
 from nmafc.storage.cold_base import ColdStorageBase
 from nmafc.storage.hot import HotStorage
+
+if TYPE_CHECKING:
+    from nmafc.storage.event_log import EventLog
 
 
 class QueryRouter:
@@ -34,6 +38,7 @@ class QueryRouter:
         self,
         query: str,
         current_turn: int,
+        event_logger: EventLog | None = None,
     ) -> list[MemoryRecord]:
         """Retrieve relevant memories for the given query using Spreading Activation.
 
@@ -41,6 +46,9 @@ class QueryRouter:
         2. Traverses graph pointers (related_entities) up to max_hops (Default: 2-hops).
         3. Falls back to Cold ROM keyword search if initial vector hits are weak.
         4. Applies spaced repetition (LTP reinforcement) to all retrieved records.
+
+        When `event_logger` is provided, RETRIEVAL events are emitted for each
+        record retrieved, capturing the score and hop distance.
         """
         query_embedding = await self._embedder.embed_single(query)
 
@@ -73,6 +81,8 @@ class QueryRouter:
         visited_ids: set[str] = set()
         visited_entities: set[str] = set()
         active_records: list[MemoryRecord] = []
+        # Track (score, hops) per record for event logging
+        record_meta: dict[str, tuple[float | None, int]] = {}
 
         # Hop 0: Vector Search Hits
         frontier_entities: set[str] = set()
@@ -82,6 +92,7 @@ class QueryRouter:
                 visited_ids.add(rec.id)
                 visited_entities.add(rec.entity_name.lower())
                 active_records.append(rec)
+                record_meta[rec.id] = (hit.score, hit.hops)
                 for rel in rec.related_entities:
                     frontier_entities.add(rel.lower())
 
@@ -103,6 +114,7 @@ class QueryRouter:
                     visited_ids.add(rec.id)
                     visited_entities.add(rec.entity_name.lower())
                     active_records.append(rec)
+                    record_meta[rec.id] = (None, current_hop)
                     for rel in rec.related_entities:
                         if rel.lower() not in visited_entities:
                             frontier_entities.add(rel.lower())
@@ -126,6 +138,23 @@ class QueryRouter:
                 )
 
         self._hot.apply_reinforcements(reinforcements, turn=current_turn)
+
+        # Emit RETRIEVAL events for all Hot RAM records that were retrieved.
+        if event_logger is not None:
+            from nmafc.schemas.events import EventType, MemoryEvent
+
+            for rec in final_records:
+                score, hops = record_meta.get(rec.id, (None, 0))
+                event_logger.log(
+                    MemoryEvent(
+                        event_type=EventType.RETRIEVAL,
+                        turn=current_turn,
+                        record_id=rec.id,
+                        entity_name=rec.entity_name,
+                        retrieval_score=score,
+                        hops=hops,
+                    )
+                )
 
         # Cold ROM records live outside Hot RAM, so they carry no id there and
         # are not reinforced -- reading the archive must not resurrect a memory

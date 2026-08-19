@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from typing import Iterable, Mapping
+from typing import TYPE_CHECKING, Iterable, Mapping
 
 from nmafc.schemas.memory import DecayConfig, MemoryRecord, MemoryType
+
+if TYPE_CHECKING:
+    from nmafc.storage.event_log import EventLog
 
 EntityGraph = Mapping[str, set[str]]
 
@@ -131,6 +134,7 @@ def decay_all(
     current_turn: int,
     config: DecayConfig,
     graph: EntityGraph | None = None,
+    event_logger: EventLog | None = None,
 ) -> list[tuple[str, float]]:
     """Compute new weights for all mutable records.
 
@@ -143,7 +147,12 @@ def decay_all(
     what beta = 0 produces, so the mechanism stays off unless both are supplied.
     Coefficients are memoised per entity: several records commonly share one
     entity, and the calculation is quadratic in that entity's degree.
+
+    When `event_logger` is provided, WEIGHT_UPDATE events are emitted for every
+    record whose weight actually changes.
     """
+    from nmafc.schemas.events import EventType, MemoryEvent
+
     results = []
     coefficients: dict[str, float] = {}
 
@@ -160,4 +169,18 @@ def decay_all(
 
         new_weight = decay_record(record, current_turn, config, clustering)
         results.append((record.id, new_weight))
+
+        if event_logger is not None and abs(new_weight - record.weight) > 1e-9:
+            event_logger.log(
+                MemoryEvent(
+                    event_type=EventType.WEIGHT_UPDATE,
+                    turn=current_turn,
+                    record_id=record.id,
+                    entity_name=record.entity_name,
+                    old_weight=record.weight,
+                    new_weight=new_weight,
+                    old_memory_type=record.memory_type.value,
+                )
+            )
+
     return results

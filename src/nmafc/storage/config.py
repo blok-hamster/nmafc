@@ -31,6 +31,10 @@ class StorageConfig(BaseModel):
             "postgresql:// DSN for remote PostgreSQL."
         ),
     )
+    event_log_uri: str = Field(
+        default="./data/events.db",
+        description="Path to the cognitive event log SQLite database for the Web UI.",
+    )
     embedding_dim: int = Field(
         default_factory=lambda: int(os.environ.get("NMAFC_EMBEDDING_DIM", "1536")),
         gt=0,
@@ -105,6 +109,8 @@ class NMafcConfig(BaseModel):
             config.storage.hot_uri = hot_uri
         if cold_uri := os.environ.get("NMAFC_COLD_URI"):
             config.storage.cold_uri = cold_uri
+        if event_log_uri := os.environ.get("NMAFC_EVENT_LOG_URI"):
+            config.storage.event_log_uri = event_log_uri
         if agent_id := os.environ.get("NMAFC_AGENT_ID"):
             config.storage.agent_id = agent_id
         if conversation_id := os.environ.get("NMAFC_CONVERSATION_ID"):

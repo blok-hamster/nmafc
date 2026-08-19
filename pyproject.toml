@@ -26,6 +26,15 @@ aws = [
 postgres = [
     "psycopg2-binary>=2.9",
 ]
+web = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "websockets>=12.0",
+]
+cli = [
+    "rich>=13.0",
+    "python-dotenv>=1.0",
+]
 bench = [
     "huggingface-hub>=0.20",
     "pandas>=2.0",
@@ -33,7 +42,11 @@ bench = [
     "kaleido>=0.2.1",
     "rouge-score>=0.1.2",
 ]
-all = ["nmafc[llm,aws,postgres,bench]"]
+all = ["nmafc[llm,aws,postgres,bench,web,cli]"]
+
+[project.scripts]
+nmafc = "nmafc.cli:main"
+nmafc-web = "nmafc.web.app:main"
 
 [dependency-groups]
 dev = [

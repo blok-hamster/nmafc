@@ -109,8 +109,8 @@ class PostgresColdStorage(ColdStorageBase):
     def mark_inactive(self, event_id: int) -> None:
         with self._conn.cursor() as cur:
             cur.execute(
-                "UPDATE memory_event_log SET is_active = FALSE WHERE id = %s",
-                (event_id,),
+                "UPDATE memory_event_log SET is_active = FALSE WHERE id = %s AND agent_id = %s AND conversation_id = %s",
+                (event_id, self._agent_id, self._conversation_id),
             )
         self._conn.commit()
 

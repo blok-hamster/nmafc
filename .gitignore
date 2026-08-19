@@ -45,3 +45,6 @@ logs/
 
 # OS files
 .DS_Store
+generate_arch_diagram.py
+DEMO_SCRIPT.md
+NMAFC_Architecture.pdf
