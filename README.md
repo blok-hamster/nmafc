@@ -74,9 +74,19 @@ The links come from the extractor, which is told to emit them for facts about
 the same person, event or object. Measured on real LoCoMo data, 95% of records
 carry at least one link and none dangle.
 
-**This mechanism was inert until the OpenAI tool schema was fixed, and enabling
-it did not improve multi-hop accuracy while tripling context cost.** Do not treat
-the description above as a validated benefit — see
+**This mechanism was inert until the OpenAI tool schema was fixed, and it is
+still not validated.** On the full run multi-hop reaches 0.427, ahead of both
+full-context stuffing (0.406) and RAG (0.396) — but n=96, and the comparison
+that would isolate the graph is confounded: the earlier `max_hops=0` run also
+used an extractor prompt containing no graph-linking instructions, so the graph
+being walked was not built the same way.
+
+The measurement is blocked from the other end too. **51% of multi-hop questions
+end in the model refusing to answer**, with the gold fact present in the
+retrieved context in most of those cases, so whatever the traversal surfaces is
+being discarded before it reaches an answer. Until the refusal rate comes down,
+`max_hops` cannot be evaluated. Do not treat the description above as a
+validated benefit — see [Current results](#current-results),
 [Spreading Activation had no edges to walk](#spreading-activation-had-no-edges-to-walk)
 and the paired A/B that follows it.
 
@@ -486,42 +496,119 @@ Academic-grade evaluation comparing four memory approaches on real research data
 
 ### Current results
 
-**Status: pilot.** Measured on 303 questions across conv-26 and conv-30 (2 of 10
-LoCoMo conversations). Answering `azure_v1/DeepSeek-V4-Pro`, embeddings
-`azure_v1/text-embedding-3-small`, judge `azure_v1/Kimi-K2.6`. Baselines are the
-full-run figures restricted to the same 303 questions, so every column is a
-paired comparison on identical inputs.
+**Status: full run.** All 10 LoCoMo conversations, all 1,986 QA pairs, no
+sampling. Answering `azure_v1/DeepSeek-V4-Pro`, embeddings
+`azure_v1/text-embedding-3-small`, judge `azure_v1/Kimi-K2.6`.
 
-| arm | judge accuracy | F1 | context tokens |
+Every figure below is regenerable from the committed per-question JSON:
+
+```bash
+python -m scripts.benchmarks._summarise_locomo \
+  --run scripts/benchmarks/results/full_v2 \
+  --baseline scripts/benchmarks/results/locomo_full
+```
+
+#### Which questions are scored
+
+LoCoMo ships 1,986 QA pairs in five categories. The fifth — `adversarial`, 446
+questions — is **excluded here, as it is in every published comparison** (Mem0,
+Zep, MemMachine and others all report on the remaining 1,540). The category was
+meant to hold unanswerable questions, but the released gold answers are ordinary
+facts: 444 of the 446 carry a real answer rather than "not mentioned", so a
+system that correctly declines is marked wrong. Scoring it measures the grader's
+defect rather than the system's memory.
+
+Both denominators are printed throughout, so the exclusion is visible rather
+than quietly applied. Reporting on 1,986 is not more honest — it is a different
+and incomparable number.
+
+#### Headline
+
+| arm | 4-cat accuracy | 5-cat | F1 | context tokens |
+|---|---|---|---|---|
+| Raw LLM (full context) | **0.7045** | 0.5670 | 0.4679 | 19,998 |
+| RAG | 0.6026 | 0.4955 | 0.4815 | 1,454 |
+| Neuromorphic (λ=0.05) | 0.5675 | 0.4471 | 0.4348 | 1,236 |
+| **Neuromorphic Tuned (λ=0.005)** | **0.5955** | 0.4698 | 0.4437 | 1,304 |
+
+Against the previous full run, paired over the scored categories:
+
+| arm | before | after | McNemar exact |
 |---|---|---|---|
-| Raw LLM (full context) | 0.545 | 0.356 | 14,326 |
-| RAG | 0.472 | 0.345 | 1,521 |
-| Neuromorphic (λ=0.05) | 0.465 | 0.334 | 1,684 |
-| **Neuromorphic Tuned (λ=0.005)** | **0.525** | **0.373** | 1,571 |
+| `neuromorphic` | 0.5351 | 0.5675 | +210/−159, **p = 0.0092** |
+| `neuromorphic_tuned` | 0.5435 | 0.5955 | +211/−132, **p = 2.3e-05** |
 
-Against the previous release on the same questions, `neuromorphic_tuned` moves
-0.472 → 0.525 (+32 questions, −16, McNemar exact **p = 0.029**). The untuned arm
-moves 0.426 → 0.465 and does **not** reach significance (+36/−24, p = 0.155); the
-gain is specific to the tuned decay horizon.
+**Harness validation.** The full-context arm scores 0.7045 where the published
+LoCoMo baselines report ~0.73 for the same condition, and our category counts
+(282 + 321 + 96 + 841) sum to exactly the 1,540 used in those papers. The ruler
+gives close to the same reading as everyone else's, which is the prerequisite
+for any of the comparisons below meaning anything.
 
-The claim the numbers support is efficiency, not raw accuracy: **within 2 points
-of full-context stuffing at 9× less context** (1,571 vs 14,326 tokens), and a
-significant improvement over RAG at parity of context budget.
+#### Per category — where the architecture earns its place, and where it does not
+
+| category | n | Tuned | Raw LLM | RAG | vs full context |
+|---|---|---|---|---|---|
+| **temporal** | 321 | **0.583** | 0.442 | 0.346 | **+14.1** |
+| **multi-hop** | 96 | **0.427** | 0.406 | 0.396 | **+2.1** |
+| single-hop | 282 | 0.486 | 0.599 | 0.418 | −11.3 |
+| open-domain | 841 | 0.656 | 0.874 | 0.786 | −21.8 |
+
+The temporal result is the one worth taking seriously: **on "when did X happen"
+questions the memory system beats full-context stuffing by 14 points while using
+15× less context**, and beats RAG by 24. That is the category a structured
+memory ought to win, and it is the only place any arm beats the full-context
+ceiling. Multi-hop edges ahead of both baselines too, though n=96 is small and
+the margin is not significant on its own.
+
+The deficit is concentrated almost entirely in **open-domain, which is 55% of
+the scored set**. Closing that one category to RAG's level would put the overall
+figure at ~0.667, above RAG. The headline is not lost across the board; it is
+lost in one place.
+
+#### Why answers are wrong: refusal, not just retrieval
+
+`_diagnose_retrieval.py` replays retrieval against the persisted stores and
+checks whether the gold answer was in the context the model actually received —
+no regeneration, no judging, one embedding call per question. Of the 623 wrong
+answers on the scored categories:
+
+| | count | share |
+|---|---|---|
+| gold answer **present** in context, still answered wrong | 356 | 57.1% |
+| gold answer absent from context | 267 | 42.9% |
+| model abstained ("I don't know") | 337 | 54.1% |
+| **abstained while holding the answer** | **190** | **30.5%** |
+
+**More than half of all wrong answers are the system declining to answer**, and
+in 190 cases it declined with the correct fact in front of it. Abstention rate
+by category: multi-hop 51.0%, temporal 25.5%, open-domain 19.9%, single-hop
+15.2%. On the excluded adversarial set it reaches 95.8%.
+
+Two consequences:
+
+- The largest single lever is the **answer prompt**, not retrieval. It is also
+  the cheapest to test, because the persisted stores make retrieval-phase
+  experiments nearly free.
+- **Spreading Activation cannot currently be evaluated at all.** Half of every
+  multi-hop question ends in a refusal, so whatever the graph retrieves is being
+  discarded before it reaches an answer. The flat multi-hop result reported
+  below is evidence about the answering step, not about the graph.
 
 Read with these caveats, all of which are load-bearing:
 
-- 303 of 1,986 questions, 2 of 10 conversations. The full run is pending.
-- These two conversations are the ones every setting was developed against,
-  including `max_hops=2`. Some of the gain may be fitting to them.
-- The improvement traces almost entirely to **one** change — enabling graph
-  traversal. Three other mechanisms were added, measured, and are documented
-  below as negative results.
-- Adversarial sits at 0.085 and is 23% of the question set. The system
-  confabulates rather than declining to answer, and that is the largest single
-  drag on the headline.
-- Do not quote a latency improvement against the previous release. The earlier
-  run was four arms × 1,986 questions under rate limiting; most of that gap is
-  queueing, not code.
+- `max_hops=2` was developed against conv-26 and conv-30. Those two are included
+  in this run, so some of the gain may still be fitting to them.
+- The previous run had `max_hops=0` **and** an extractor prompt with no
+  graph-linking instructions at all (see `integration/extractor.py`). The
+  before/after comparison therefore moves two things at once and cannot be used
+  to attribute the gain to graph traversal specifically.
+- Do not quote a latency improvement against the previous release. Both runs
+  were rate-limited; most of any gap is queueing, not code. The number that does
+  stand is the comparison against our own RAG arm: 21.3 s per answer against
+  3.6 s, roughly 6× slower for 1 point less accuracy.
+- An earlier revision of this section claimed the system "confabulates rather
+  than declining to answer" on adversarial. That was **backwards** — it abstains
+  on 95.8% of them. The correction is what produced the refusal analysis above.
 
 ### Datasets
 
@@ -674,6 +761,38 @@ batching proxy can return different completions for identical requests even at
 temperature 0. Treat small-sample runs as plumbing checks, not results, and
 quote a margin of error derived from repeating a run rather than assuming
 determinism.
+
+#### Committed benchmark data
+
+Per-question results for the two runs the README cites are in the repository, so
+the tables can be recomputed rather than taken on trust:
+
+| path | contents |
+|---|---|
+| `results/full_v2/results.json` | current run — both memory arms, 1,986 rows each |
+| `results/full_v2/checkpoint_*.json` | same rows grouped by conversation, as written during the run |
+| `results/full_v2.log` | the run's console log, including the four network blips it recovered from |
+| `results/locomo_full/` | the earlier baseline run — all four arms |
+
+Each row carries the question, category, gold answer, prediction, judge verdict,
+F1, context tokens and latency.
+
+What is **not** committed is the persisted memory stores each run leaves behind:
+4.1 GB across 222,485 files for ten conversations. They stay local (see
+`.gitignore`), and they are what makes retrieval-phase experiments cheap —
+`_diagnose_retrieval.py` replays against them for one embedding call per
+question instead of a full re-ingest. They are written under `<output>/stores/`
+as a side effect of ingestion checkpointing, so any run with
+`--ingest-checkpoint-every` non-zero (the default is 25) leaves them behind.
+
+Three read-only analysis scripts operate on this data and make no API calls
+except where noted:
+
+| script | question it answers | cost |
+|---|---|---|
+| `_summarise_locomo.py` | what are the numbers, on both denominators | none |
+| `_diagnose_retrieval.py` | is a wrong answer a ranking failure or a refusal | 1 embedding/question |
+| `_analyse_beta_survivors.py` | which facts did clustering protection actually save | none |
 
 ### Reliability & Throughput
 

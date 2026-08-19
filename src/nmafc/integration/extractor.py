@@ -28,11 +28,26 @@ Set `related_entities` to the entity names of other facts this one is genuinely 
 # thing on offer. It classifies 82% of facts CoreAnchor, so decay barely runs:
 # accurate on this benchmark and close to inert as a memory system.
 #
-# Reconstructed rather than restored -- the project is not under version control
-# and no copy of the file survived. It is validated behaviourally instead, via
-# scripts/benchmarks/_probe_extraction.py: the original produced ~1.9 facts per
-# exchange at ~82% CoreAnchor, and a reconstruction that reproduces those two
-# numbers is the same prompt for every purpose this codebase has.
+# Reconstructed from behaviour rather than restored from the file, and then
+# checked against the original at f0b87a8. Not identical, and the differences
+# are worth knowing before attributing anything to this prompt:
+#
+#   - Three wording changes. `EphemeralState` here names the ordinary business
+#     of talking (agreeing, encouraging, asking after each other); the original
+#     said only "genuinely momentary things ... passing remarks, small talk".
+#     The completed-events and event-vs-state clauses are shorter here. Neither
+#     changes what the categories mean.
+#   - One addition: the `## Graph Links:` section in _SHARED_TAIL does not exist
+#     in the original at all. The pushed baseline therefore produced every
+#     `related_entities` link with no instruction on how to link, which is the
+#     input Spreading Activation traverses. Any comparison across that commit
+#     that credits or blames max_hops is confounded by this, because the graph
+#     being walked was not built the same way.
+#
+# Behavioural check via scripts/benchmarks/_probe_extraction.py: the original
+# produced ~1.9 facts per exchange at ~82% CoreAnchor, and this reproduces both.
+# That match is what licenses calling it the same prompt for classification
+# purposes -- it says nothing about the graph, which the probe does not measure.
 EXTRACTION_SYSTEM_PROMPT_PERMISSIVE = """You are a helpful conversational AI assistant with a neuromorphic memory system.
 
 As you respond to the user, you MUST simultaneously analyze the conversation for any facts, state changes, or information worth remembering. When you identify such information, call the `update_memory` tool with structured updates.

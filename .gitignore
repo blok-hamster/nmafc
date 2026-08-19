@@ -19,8 +19,27 @@ data/
 *.lancedb/
 
 # Benchmark results and checkpoints
-scripts/benchmarks/results/
-checkpoint_*.json
+#
+# The tree is ignored by default because a run leaves its persisted memory
+# stores behind: 4.1 GB across 222,485 files for the ten LoCoMo conversations,
+# which would exceed GitHub's limits and make clone times useless. They are also
+# regenerable, and only worth keeping locally so retrieval-phase experiments can
+# replay against them without re-ingesting.
+#
+# The per-question JSON for the two runs the README cites is the exception. It
+# is ~10 MB, and without it every figure in the results section is a number a
+# reader has to take on trust -- _summarise_locomo.py regenerates the whole table
+# from these files. Re-including them requires un-ignoring the directory first;
+# git cannot re-include a file whose parent directory is excluded.
+scripts/benchmarks/results/**
+!scripts/benchmarks/results/full_v2/
+# Re-ignored as a directory, not a glob, so git prunes the subtree instead of
+# walking 222k files on every status call. Un-ignoring full_v2/ above is what
+# forces the descent; this stops it at the door.
+scripts/benchmarks/results/full_v2/stores/
+!scripts/benchmarks/results/full_v2/results.json
+!scripts/benchmarks/results/full_v2/checkpoint_*.json
+!scripts/benchmarks/results/full_v2.log
 # Run logs (--log-file), hundreds of KB per run and reproducible from a rerun
 logs/
 
