@@ -24,6 +24,7 @@ class ColdStorageBase(ABC):
         update: MemoryStateUpdate,
         turn: int,
         embedding: list[float] | None = None,
+        valid_at: int | None = None,
     ) -> int: ...
 
     @abstractmethod

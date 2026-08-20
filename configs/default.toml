@@ -4,7 +4,7 @@ cold_uri = "./data/cold.db"
 
 [decay]
 lambda_core_anchor = 0.0
-lambda_active_context = 0.05
+lambda_active_context = 0.005
 lambda_ephemeral = 0.69
 eta = 0.15
 gamma = 0.1
@@ -21,6 +21,9 @@ w_prune = 0.1
 theta = 0.45
 top_k = 10
 fallback_keyword_limit = 20
+always_search_cold = true
+rrf_k = 60
+rerank_top_k = 20
 
 [time]
 unit = "turns"

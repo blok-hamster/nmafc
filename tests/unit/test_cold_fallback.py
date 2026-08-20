@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from nmafc.integration.base import EmbeddingProvider
 from nmafc.integration.query_router import QueryRouter
 from nmafc.schemas.memory import (
     DecayConfig,
@@ -25,14 +26,14 @@ from nmafc.storage.hot import HotStorage
 EMBED_DIM = 3
 
 
-class FixedEmbedder:
+class FixedEmbedder(EmbeddingProvider):
     """Returns one caller-chosen vector, so tests set the similarity directly."""
 
     def __init__(self, vector: list[float]) -> None:
         self.vector = vector
 
-    async def embed_single(self, text: str) -> list[float]:
-        return self.vector
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        return [self.vector for _ in texts]
 
 
 @pytest.fixture
@@ -86,18 +87,36 @@ async def test_weak_hit_reaches_cold_rom(stores):
 
 
 @pytest.mark.asyncio
-async def test_strong_hit_skips_cold_rom(stores):
-    """Hot RAM answering the query is the whole point; do not pull in the archive."""
+async def test_strong_hit_skips_cold_rom_legacy_mode(stores):
+    """With always_search_cold=False, a strong Hot hit skips the archive (legacy theta gate)."""
     hot, cold = stores
     seed(hot, cold)
 
     router = QueryRouter(
-        hot, cold, FixedEmbedder([1.0, 0.0, 0.0]), DecayConfig(theta=0.75, top_k=5)
+        hot, cold, FixedEmbedder([1.0, 0.0, 0.0]),
+        DecayConfig(theta=0.75, top_k=5, always_search_cold=False),
     )
     results = await router.retrieve("marine biology", current_turn=2)
 
     entities = {r.entity_name for r in results}
     assert entities == {"hot_fact"}
+
+
+@pytest.mark.asyncio
+async def test_always_search_cold_includes_archive(stores):
+    """With always_search_cold=True (default), archive is always consulted."""
+    hot, cold = stores
+    seed(hot, cold)
+
+    router = QueryRouter(
+        hot, cold, FixedEmbedder([1.0, 0.0, 0.0]),
+        DecayConfig(theta=0.75, top_k=5, always_search_cold=True),
+    )
+    results = await router.retrieve("marine biology", current_turn=2)
+
+    entities = {r.entity_name for r in results}
+    assert "hot_fact" in entities
+    assert "archived_fact" in entities
 
 
 @pytest.mark.asyncio

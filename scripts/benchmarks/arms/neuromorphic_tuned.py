@@ -48,16 +48,14 @@ from nmafc.storage.config import NMafcConfig, StorageConfig
 from nmafc.wrapper import NeuromorphicMemory
 
 from ..evaluation.metrics import ArmResponse
-from .base import BenchmarkArm, SHORT_ANSWER_RULES, build_exchanges
+from .base import BenchmarkArm, SHORT_ANSWER_RULES, build_exchanges, strip_answer
 
 # Retention horizon ~= ln(1/w_prune) / lambda = ln(10) / 0.005 ~= 460 turns.
 LAMBDA_ACTIVE_CONTEXT_TUNED = 0.005
 
-ANSWER_SYSTEM_PROMPT = """You are a conversational AI assistant with a neuromorphic memory system.
-Relevant memories from past conversations are provided below, ranked by salience.
-Answer the user's question based ONLY on information from your memories.
-If the answer is not in your memories, say "I don't know" or "This information is not available."
-Be concise — answer in a few words or a short phrase when possible.""" + SHORT_ANSWER_RULES
+ANSWER_SYSTEM_PROMPT = """You have a knowledge graph of facts from past conversations, shown in <FACTS> tags.
+Answer the question using these facts. Combine and reason across multiple facts when needed.
+Always prefer giving an answer over refusing — if the facts support a reasonable inference, state it directly.""" + SHORT_ANSWER_RULES
 
 
 class NeuromorphicTunedArm(BenchmarkArm):
@@ -172,7 +170,7 @@ class NeuromorphicTunedArm(BenchmarkArm):
 
         system = ANSWER_SYSTEM_PROMPT
         if memory_context:
-            system += f"\n\n=== RELEVANT MEMORIES ===\n{memory_context}\n=== END MEMORIES ==="
+            system += f"\n\n{memory_context}"
 
         response_text, _ = await self._llm.chat_with_extraction(
             messages=[{"role": "user", "content": question}],
@@ -184,7 +182,7 @@ class NeuromorphicTunedArm(BenchmarkArm):
         completion_tokens = len(response_text) // 4
 
         response = ArmResponse(
-            answer=response_text.strip(),
+            answer=strip_answer(response_text),
             latency_ms=latency_ms,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,

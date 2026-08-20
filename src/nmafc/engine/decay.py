@@ -159,6 +159,8 @@ def decay_all(
     for record in records:
         if record.memory_type == MemoryType.CORE_ANCHOR:
             continue
+        if record.invalid_at is not None:
+            continue
 
         clustering = 0.0
         if graph is not None and config.beta > 0.0:

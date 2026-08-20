@@ -6,7 +6,7 @@ from pathlib import Path
 
 from nmafc.engine.consolidation import MemoryConsolidator
 from nmafc.engine.decay import build_entity_graph, decay_all
-from nmafc.engine.pruning import apply_suppression, create_suppression_event, detect_override, prune_cycle
+from nmafc.engine.pruning import apply_suppression, create_suppression_event, detect_override, invalidate_record, prune_cycle
 from nmafc.integration.base import EmbeddingProvider, LLMProvider
 from nmafc.integration.extractor import StateExtractor
 from nmafc.integration.query_router import QueryRouter
@@ -235,23 +235,27 @@ class NeuromorphicMemory:
             # The archive gets the same vector Hot RAM is about to store, which
             # is what lets Cold ROM answer by meaning rather than by shared
             # words. It is free: the embedding has already been paid for above.
-            self._cold.append_event(update, self._current_turn, embedding)
+            self._cold.append_event(update, self._current_turn, embedding, valid_at=self._current_turn)
 
             existing = self._hot.get_by_entity(update.entity_name)
             if update.overrides_entity:
                 existing += self._hot.get_by_entity(update.overrides_entity)
 
             overrides = detect_override(update, existing)
-            for old_record in overrides:
-                suppressed = apply_suppression(old_record, self._decay_config.gamma)
-                self._hot.update_weight(old_record.id, suppressed.weight)
-                self._event_log.log(
-                    create_suppression_event(
-                        old_record, suppressed.weight,
-                        suppressed_by=update.entity_name,
-                        turn=self._current_turn,
+            if overrides:
+                invalidations = [
+                    (old_record.id, self._current_turn)
+                    for old_record in overrides
+                ]
+                self._hot.set_invalid_at_many(invalidations)
+                for old_record in overrides:
+                    self._event_log.log(
+                        create_suppression_event(
+                            old_record, old_record.weight,
+                            suppressed_by=update.entity_name,
+                            turn=self._current_turn,
+                        )
                     )
-                )
 
             record = MemoryRecord(
                 entity_name=update.entity_name,
@@ -262,6 +266,7 @@ class NeuromorphicMemory:
                 created_at_turn=self._current_turn,
                 last_reinforced_turn=self._current_turn,
                 related_entities=list(update.related_entities),
+                valid_at=self._current_turn,
             )
             self._hot.upsert(record, embedding)
 

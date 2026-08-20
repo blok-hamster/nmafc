@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 from nmafc.engine.reinforcement import reinforce
 from nmafc.integration.base import EmbeddingProvider
-from nmafc.schemas.memory import DecayConfig, MemoryRecord, MemoryType
+from nmafc.schemas.memory import DecayConfig, MemoryRecord, MemoryType, SearchCandidate
 from nmafc.storage.cold_base import ColdStorageBase
 from nmafc.storage.hot import HotStorage
 
@@ -40,65 +40,66 @@ class QueryRouter:
         current_turn: int,
         event_logger: EventLog | None = None,
     ) -> list[MemoryRecord]:
-        """Retrieve relevant memories for the given query using Spreading Activation.
+        """Retrieve relevant memories using unified parallel search + reranking.
 
-        1. Performs top_k vector similarity search in Hot RAM (Hop 0).
-        2. Traverses graph pointers (related_entities) up to max_hops (Default: 2-hops).
-        3. Falls back to Cold ROM keyword search if initial vector hits are weak.
-        4. Applies spaced repetition (LTP reinforcement) to all retrieved records.
+        1. Searches Hot RAM (vector, top_k) and Cold ROM (semantic + keyword) in parallel.
+        2. Traverses graph pointers (related_entities) up to max_hops in Hot RAM.
+        3. Expands one hop into the Cold ROM archive from cold-only seeds.
+        4. Reranks all candidates via Reciprocal Rank Fusion (RRF).
+        5. Applies LTP reinforcement to Hot-sourced records that survive reranking.
 
         When `event_logger` is provided, RETRIEVAL events are emitted for each
         record retrieved, capturing the score and hop distance.
         """
+        from nmafc.engine.reranking import rerank
+
         query_embedding = await self._embedder.embed_single(query)
+        exclude_inv = self._config.exclude_invalidated
 
-        vector_hits = self._hot.search(query_embedding, top_k=self._config.top_k)
+        # --- Step 1: Parallel search across both tiers ---
+        vector_hits = self._hot.search(
+            query_embedding,
+            top_k=self._config.top_k,
+            exclude_invalidated=exclude_inv,
+        )
 
-        # Cold ROM fallback. theta is compared against a cosine similarity (see
-        # HotStorage.search), so a weak best hit means Hot RAM holds nothing
-        # on-topic and the archive is worth consulting.
-        #
-        # These records are merged into the result at the end rather than
-        # replacing the Hot RAM hits. The previous version fetched them and then
-        # threw them away unless vector_hits was completely empty, which on a
-        # populated store never happens -- so the fallback did the keyword search
-        # on every weak query and used the answer on none of them.
-        #
-        # The fallback is hybrid. Keyword search alone could only reach facts
-        # that reuse the question's words, so a question about someone's aunt
-        # could not match a fact filed as "mother's sister" even though the
-        # archive held it -- and the archive is the only complete record, since
-        # Hot RAM prunes and Cold ROM never does. Dense search over the same
-        # embeddings Hot RAM uses closes that gap; keyword search is kept
-        # alongside it because it still wins on rare exact tokens (names, dates,
-        # drug names) that embeddings blur together, and because rows archived
-        # before vectors were stored have no embedding to match on.
         cold_records: list[MemoryRecord] = []
-        if not vector_hits or vector_hits[0].score < self._config.theta:
+        if self._config.always_search_cold:
+            cold_records = self._search_cold(query_embedding, query)
+        elif not vector_hits or vector_hits[0].score < self._config.theta:
             cold_records = self._search_cold(query_embedding, query)
 
-        # Spreading Activation Graph Traversal
+        # --- Step 2: Build candidate lists with source tags ---
+        candidates: list[SearchCandidate] = []
         visited_ids: set[str] = set()
         visited_entities: set[str] = set()
-        active_records: list[MemoryRecord] = []
-        # Track (score, hops) per record for event logging
         record_meta: dict[str, tuple[float | None, int]] = {}
 
-        # Hop 0: Vector Search Hits
+        # Hot RAM vector hits (Hop 0)
         frontier_entities: set[str] = set()
-        for hit in vector_hits:
+        for rank, hit in enumerate(vector_hits):
             rec = hit.record
             if rec.id not in visited_ids:
                 visited_ids.add(rec.id)
                 visited_entities.add(rec.entity_name.lower())
-                active_records.append(rec)
-                record_meta[rec.id] = (hit.score, hit.hops)
+                candidates.append(SearchCandidate(
+                    record=rec, score=hit.score, source="hot_vector",
+                    rank_in_source=rank, hop_distance=0,
+                ))
+                record_meta[rec.id] = (hit.score, 0)
                 for rel in rec.related_entities:
                     frontier_entities.add(rel.lower())
 
-        # Hop 1 to max_hops Spreading Activation
+        # Cold ROM results
+        for rank, rec in enumerate(cold_records):
+            candidates.append(SearchCandidate(
+                record=rec, score=None, source="cold_semantic",
+                rank_in_source=rank, hop_distance=0,
+            ))
+
+        # --- Step 3: BFS expansion in Hot RAM ---
         current_hop = 0
-        max_hops = getattr(self._config, "max_hops", 2)
+        max_hops = self._config.max_hops
 
         while current_hop < max_hops and frontier_entities:
             current_hop += 1
@@ -106,32 +107,42 @@ class QueryRouter:
             if not unvisited:
                 break
 
-            neighbors = self._hot.get_by_entities(unvisited)
+            neighbors = self._hot.get_by_entities(unvisited, exclude_invalidated=exclude_inv)
             frontier_entities = set()
 
             for rec in neighbors:
                 if rec.id not in visited_ids:
                     visited_ids.add(rec.id)
                     visited_entities.add(rec.entity_name.lower())
-                    active_records.append(rec)
+                    candidates.append(SearchCandidate(
+                        record=rec, score=None, source="bfs_hot",
+                        rank_in_source=0, hop_distance=current_hop,
+                    ))
                     record_meta[rec.id] = (None, current_hop)
                     for rel in rec.related_entities:
                         if rel.lower() not in visited_entities:
                             frontier_entities.add(rel.lower())
 
-        # Apply Long-Term Potentiation (LTP) Reinforcement to retrieved records.
-        # The writes are collected and applied in one batch: Spreading Activation
-        # routinely surfaces dozens of records per question, and reinforcing them
-        # one at a time cost a scan, a delete and an add each.
-        final_records: list[MemoryRecord] = []
+        # --- Step 4: Cold ROM one-hop graph expansion ---
+        if cold_records:
+            seen_entities = {rec.entity_name.lower() for rec in
+                            [c.record for c in candidates]}
+            cold_only = [c.record for c in candidates if c.source.startswith("cold")]
+            expanded = self._expand_cold_graph(cold_only, seen_entities)
+            for rank, rec in enumerate(expanded):
+                candidates.append(SearchCandidate(
+                    record=rec, score=None, source="bfs_cold",
+                    rank_in_source=rank, hop_distance=1,
+                ))
+
+        # --- Step 5: Rerank all candidates ---
+        final_records = rerank(candidates, self._config, current_turn)
+
+        # --- Step 6: LTP reinforcement (Hot-sourced records only) ---
+        hot_ids = visited_ids
         reinforcements: list[tuple[str, int]] = []
-        for rec in active_records:
-            if rec.weight < self._config.w_prune:
-                continue
-
-            final_records.append(rec)
-
-            if rec.memory_type != MemoryType.EPHEMERAL_STATE:
+        for rec in final_records:
+            if rec.id in hot_ids and rec.memory_type != MemoryType.EPHEMERAL_STATE:
                 reinforced = reinforce(rec, current_turn)
                 reinforcements.append(
                     (reinforced.id, reinforced.consolidation_index)
@@ -139,7 +150,7 @@ class QueryRouter:
 
         self._hot.apply_reinforcements(reinforcements, turn=current_turn)
 
-        # Emit RETRIEVAL events for all Hot RAM records that were retrieved.
+        # Emit RETRIEVAL events
         if event_logger is not None:
             from nmafc.schemas.events import EventType, MemoryEvent
 
@@ -155,24 +166,6 @@ class QueryRouter:
                         hops=hops,
                     )
                 )
-
-        # Cold ROM records live outside Hot RAM, so they carry no id there and
-        # are not reinforced -- reading the archive must not resurrect a memory
-        # into the working set. Entities Hot RAM already surfaced are skipped, so
-        # the fallback only ever adds facts the vector search missed.
-        if cold_records:
-            seen = {rec.entity_name.lower() for rec in final_records}
-            merged: list[MemoryRecord] = []
-            for rec in cold_records:
-                key = rec.entity_name.lower()
-                if key not in seen:
-                    seen.add(key)
-                    merged.append(rec)
-            final_records.extend(merged)
-            # Links out of the archive hits, followed inside the archive. Only
-            # from what actually made it into the result, so a fact filtered out
-            # as a duplicate does not still drag its neighbours in.
-            final_records.extend(self._expand_cold_graph(merged, seen))
 
         return final_records
 
@@ -280,11 +273,19 @@ class QueryRouter:
         return found
 
     def format_context(self, records: list[MemoryRecord]) -> str:
-        """Format retrieved memories as a context string for the LLM."""
+        """Format retrieved memories using Zep-style structured fact presentation.
+
+        Facts are presented as discrete items with temporal validity ranges.
+        This gives the LLM scannable, atomic facts rather than a narrative list.
+        """
         if not records:
             return ""
 
-        lines = []
+        lines = ["<FACTS>"]
         for r in records:
-            lines.append(f"- [{r.memory_type.value}] {r.entity_name}: {r.fact_content}")
+            valid_from = f"turn {r.valid_at}" if r.valid_at else f"turn {r.created_at_turn}"
+            valid_to = f"turn {r.invalid_at}" if r.invalid_at else "present"
+            lines.append(f"{r.fact_content} (Valid: {valid_from} - {valid_to})")
+        lines.append("</FACTS>")
+
         return "\n".join(lines)

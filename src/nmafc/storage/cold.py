@@ -89,7 +89,12 @@ class ColdStorage(ColdStorageBase):
         # be rebuilt from scratch. Add the columns in place; the old rows keep
         # NULL and stay keyword-reachable.
         existing = {row[1] for row in self._conn.execute("PRAGMA table_info(memory_event_log)")}
-        for column, decl in (("related_entities", "TEXT"), ("embedding", "BLOB")):
+        for column, decl in (
+            ("related_entities", "TEXT"),
+            ("embedding", "BLOB"),
+            ("valid_at", "INTEGER"),
+            ("invalid_at", "INTEGER"),
+        ):
             if column not in existing:
                 self._conn.execute(
                     f"ALTER TABLE memory_event_log ADD COLUMN {column} {decl}"
@@ -101,6 +106,7 @@ class ColdStorage(ColdStorageBase):
         update: MemoryStateUpdate,
         turn: int,
         embedding: list[float] | None = None,
+        valid_at: int | None = None,
     ) -> int:
         """Append one immutable event, optionally with its dense vector.
 
@@ -112,8 +118,8 @@ class ColdStorage(ColdStorageBase):
         cursor = self._conn.execute(
             """INSERT INTO memory_event_log
                (agent_id, conversation_id, timestamp, turn, entity_name, fact_content,
-                memory_type, overrides_entity, related_entities, embedding)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                memory_type, overrides_entity, related_entities, embedding, valid_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 self._agent_id,
                 self._conversation_id,
@@ -125,6 +131,7 @@ class ColdStorage(ColdStorageBase):
                 update.overrides_entity,
                 json.dumps(list(update.related_entities)),
                 self._pack(embedding),
+                valid_at,
             ),
         )
         self._conn.commit()

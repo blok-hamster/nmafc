@@ -49,6 +49,10 @@ MEMORY_TOOL_SCHEMA: dict[str, Any] = {
                                 "items": {"type": "string"},
                                 "description": "Entity names linked to this fact for graph spreading activation (e.g. ['spouse_james', 'brother_david']).",
                             },
+                            "valid_at": {
+                                "type": "string",
+                                "description": "When the fact became true — an ISO date or relative expression resolvable from the session timestamp. Omit if not explicitly dated in conversation.",
+                            },
                         },
                         "required": ["entity_name", "fact_content", "memory_type"],
                     },

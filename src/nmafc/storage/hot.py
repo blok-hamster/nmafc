@@ -24,7 +24,11 @@ SCHEMA = pa.schema([
     pa.field("created_at_turn", pa.int32()),
     pa.field("last_reinforced_turn", pa.int32()),
     pa.field("related_entities", pa.list_(pa.string())),
+    pa.field("valid_at", pa.int32()),
+    pa.field("invalid_at", pa.int32()),
 ])
+
+_TEMPORAL_COLUMNS = {"valid_at", "invalid_at"}
 
 
 class HotStorage:
@@ -58,9 +62,28 @@ class HotStorage:
                 pa.field("created_at_turn", pa.int32()),
                 pa.field("last_reinforced_turn", pa.int32()),
                 pa.field("related_entities", pa.list_(pa.string())),
+                pa.field("valid_at", pa.int32()),
+                pa.field("invalid_at", pa.int32()),
             ])
             self._db.create_table(TABLE_NAME, schema=schema)
         self._table = self._db.open_table(TABLE_NAME)
+        self._migrate_schema()
+
+    def _migrate_schema(self) -> None:
+        """Add temporal columns to tables created before they existed."""
+        existing_names = {f.name for f in self._table.schema}
+        missing = _TEMPORAL_COLUMNS - existing_names
+        if not missing:
+            return
+        rows = self._table.search().limit(10000).to_list()
+        if not rows:
+            return
+        for row in rows:
+            row.pop("_distance", None)
+            for col in missing:
+                row.setdefault(col, None)
+        self._table.delete("true")
+        self._table.add(rows)
 
     @property
     def _scope_filter(self) -> str:
@@ -85,10 +108,17 @@ class HotStorage:
             "created_at_turn": record.created_at_turn,
             "last_reinforced_turn": record.last_reinforced_turn,
             "related_entities": list(record.related_entities),
+            "valid_at": record.valid_at,
+            "invalid_at": record.invalid_at,
         }
         self._table.add([row])
 
-    def search(self, query_embedding: list[float], top_k: int = 10) -> list[SearchResult]:
+    def search(
+        self,
+        query_embedding: list[float],
+        top_k: int = 10,
+        exclude_invalidated: bool = True,
+    ) -> list[SearchResult]:
         # Cosine, not the LanceDB default of L2. `score` below is consumed as a
         # similarity in [0, 1] and compared against DecayConfig.theta, and only
         # cosine distance gives that: it is 1 - cos_sim, so 1 - distance is the
@@ -96,10 +126,13 @@ class HotStorage:
         # meaningless -- unit-norm embedding pairs land at distance 1.4-1.6, so
         # 1 - distance clamps to 0.0 for every hit and no threshold above zero
         # is ever reachable.
+        where = self._scope_filter
+        if exclude_invalidated:
+            where += " AND invalid_at IS NULL"
         results = (
             self._table.search(query_embedding)
             .distance_type("cosine")
-            .where(self._scope_filter)
+            .where(where)
             .limit(top_k)
             .to_list()
         )
@@ -120,13 +153,18 @@ class HotStorage:
         )
         return [self._row_to_record(r) for r in results]
 
-    def get_by_entities(self, entity_names: list[str]) -> list[MemoryRecord]:
+    def get_by_entities(
+        self, entity_names: list[str], exclude_invalidated: bool = True
+    ) -> list[MemoryRecord]:
         if not entity_names:
             return []
         quoted = ", ".join(f"'{name}'" for name in set(entity_names))
+        where = f"{self._scope_filter} AND entity_name IN ({quoted})"
+        if exclude_invalidated:
+            where += " AND invalid_at IS NULL"
         results = (
             self._table.search()
-            .where(f"{self._scope_filter} AND entity_name IN ({quoted})")
+            .where(where)
             .limit(500)
             .to_list()
         )
@@ -236,6 +274,21 @@ class HotStorage:
         self._table.delete(f"id IN ({quoted})")
         self._table.add(rows)
 
+    def set_invalid_at_many(self, updates: list[tuple[str, int]]) -> None:
+        """Mark records as temporally invalidated in a single batch operation."""
+        if not updates:
+            return
+        invalidations = dict(updates)
+        quoted = ", ".join(f"'{rid}'" for rid in invalidations)
+        rows = self._table.search().where(f"id IN ({quoted})").limit(10000).to_list()
+        if not rows:
+            return
+        for row in rows:
+            row.pop("_distance", None)
+            row["invalid_at"] = invalidations[row["id"]]
+        self._table.delete(f"id IN ({quoted})")
+        self._table.add(rows)
+
     def delete(self, record_id: str) -> None:
         self._table.delete(f"id = '{record_id}'")
 
@@ -285,5 +338,7 @@ class HotStorage:
             created_at_turn=row["created_at_turn"],
             last_reinforced_turn=row["last_reinforced_turn"],
             related_entities=rel_list,
+            valid_at=row.get("valid_at"),
+            invalid_at=row.get("invalid_at"),
         )
 

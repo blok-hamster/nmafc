@@ -15,6 +15,9 @@ Exchanges may be prefixed with a session timestamp, e.g. "[Session — 1:56 pm o
 - If a new fact contradicts or replaces a previously stored fact of a different entity name (e.g. switching from lisinopril to losartan, or schedule moving from 7AM to 9AM), set `overrides_entity` to the exact entity name of the old fact so it can be suppressed and pruned.
 - Never set `overrides_entity` on a CoreAnchor completed event. A new event does not undo an earlier one; both happened.
 
+## Temporal Anchoring:
+Set `valid_at` when the conversation explicitly dates a fact — either an absolute date ("I started in January 2023") or a relative one resolvable from the session timestamp ("I started last week"). Use the ISO date string or the relative expression; downstream code resolves it. Leave it null when no temporal anchor is mentioned — do not invent one.
+
 ## Graph Links:
 Set `related_entities` to the entity names of other facts this one is genuinely connected to — facts about the same person, the same event, or the same object.
 - Retrieval starts from the facts that match the question and then spreads outward along these links. A question that never mentions an entity by name can only reach it through a link, so an unrecorded link is a fact that cannot be found.

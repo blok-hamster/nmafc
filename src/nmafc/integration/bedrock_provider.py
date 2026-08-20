@@ -48,6 +48,10 @@ BEDROCK_TOOL_SCHEMA: dict[str, Any] = {
                                         "spreading activation (e.g. ['spouse_james', 'brother']). "
                                     ),
                                 },
+                                "valid_at": {
+                                    "type": "string",
+                                    "description": "When the fact became true — an ISO date or relative expression. Omit if not explicitly dated.",
+                                },
                             },
                             "required": ["entity_name", "fact_content", "memory_type"],
                         },

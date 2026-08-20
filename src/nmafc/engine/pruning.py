@@ -30,9 +30,22 @@ def detect_override(
 
 
 def apply_suppression(record: MemoryRecord, gamma: float) -> MemoryRecord:
-    """Apply synaptic suppression multiplier to a contradicted record."""
+    """Apply synaptic suppression multiplier to a contradicted record.
+
+    Legacy path — kept for backward compatibility with tests and benchmarks
+    that explicitly set exclude_invalidated=False.
+    """
     new_weight = record.weight * gamma
     return record.model_copy(update={"weight": new_weight})
+
+
+def invalidate_record(record: MemoryRecord, current_turn: int) -> MemoryRecord:
+    """Mark a contradicted record as temporally invalidated.
+
+    The record's weight is frozen (not multiplied by gamma) and invalid_at is
+    set. The record remains in Hot RAM but is excluded from default searches.
+    """
+    return record.model_copy(update={"invalid_at": current_turn})
 
 
 def create_suppression_event(
@@ -71,24 +84,46 @@ def prune_cycle(
     current_turn: int,
     event_logger: EventLog | None = None,
 ) -> int:
-    """Evict all below-threshold records from Hot RAM.
+    """Evict or invalidate below-threshold records from Hot RAM.
 
-    Records are physically deleted from LanceDB but remain
-    in the Cold ROM as inactive events (preserving the audit trail).
-    Returns the count of pruned records.
+    Behavior depends on memory type:
+    - EphemeralState below w_prune: physically deleted (genuine expiry)
+    - ActiveContext below w_prune: temporally invalidated (invalid_at set,
+      excluded from default search but retained for temporal queries)
+    - Already-invalidated records below 0.01: physically deleted to prevent
+      indefinite accumulation
+
+    Returns the count of records removed or invalidated.
 
     When `event_logger` is provided, PRUNE events are emitted for each
-    evicted record before deletion.
+    affected record.
     """
-    all_records = hot.get_all()
-    prunable_ids = identify_prunable(all_records, w_prune)
+    from nmafc.schemas.memory import MemoryType
 
-    if event_logger is not None and prunable_ids:
+    all_records = hot.get_all()
+
+    delete_ids: list[str] = []
+    invalidate_updates: list[tuple[str, int]] = []
+
+    for rec in all_records:
+        if rec.weight > w_prune:
+            if rec.invalid_at is not None and rec.weight < 0.01:
+                delete_ids.append(rec.id)
+            continue
+
+        if rec.invalid_at is not None:
+            delete_ids.append(rec.id)
+        elif rec.memory_type == MemoryType.EPHEMERAL_STATE:
+            delete_ids.append(rec.id)
+        else:
+            invalidate_updates.append((rec.id, current_turn))
+
+    if event_logger is not None and (delete_ids or invalidate_updates):
         from nmafc.schemas.events import EventType, MemoryEvent
 
-        prunable_set = set(prunable_ids)
+        affected = set(delete_ids) | {uid for uid, _ in invalidate_updates}
         for rec in all_records:
-            if rec.id in prunable_set:
+            if rec.id in affected:
                 event_logger.log(
                     MemoryEvent(
                         event_type=EventType.PRUNE,
@@ -100,6 +135,7 @@ def prune_cycle(
                     )
                 )
 
-    hot.delete_many(prunable_ids)
+    hot.delete_many(delete_ids)
+    hot.set_invalid_at_many(invalidate_updates)
 
-    return len(prunable_ids)
+    return len(delete_ids) + len(invalidate_updates)

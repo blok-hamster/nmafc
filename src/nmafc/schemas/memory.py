@@ -38,6 +38,10 @@ class MemoryStateUpdate(BaseModel):
         default_factory=list,
         description="List of related entity names linked to this fact for graph spreading activation.",
     )
+    valid_at: Optional[str] = Field(
+        default=None,
+        description="When the fact became true — a date string or relative reference resolved downstream.",
+    )
 
 
 class UnifiedMemoryPayload(BaseModel):
@@ -62,6 +66,14 @@ class MemoryRecord(BaseModel):
     last_reinforced_turn: int = Field(default=0, ge=0)
     is_active: bool = Field(default=True)
     related_entities: list[str] = Field(default_factory=list)
+    valid_at: Optional[int] = Field(
+        default=None,
+        description="Turn when the fact became true. Falls back to created_at_turn if None.",
+    )
+    invalid_at: Optional[int] = Field(
+        default=None,
+        description="Turn when the fact was superseded. None means still valid.",
+    )
 
 
 class SearchResult(BaseModel):
@@ -70,6 +82,16 @@ class SearchResult(BaseModel):
     record: MemoryRecord
     score: float = Field(ge=0.0, le=1.0)
     hops: int = Field(default=0, ge=0, description="Graph traversal hop distance (0 = direct vector hit)")
+
+
+class SearchCandidate(BaseModel):
+    """Internal candidate for reranking — carries source provenance and rank."""
+
+    record: MemoryRecord
+    score: Optional[float] = None
+    source: str = Field(description="Origin: hot_vector, cold_semantic, cold_keyword, bfs_hot, bfs_cold")
+    rank_in_source: int = Field(default=0, ge=0)
+    hop_distance: int = Field(default=0, ge=0)
 
 
 
@@ -142,6 +164,20 @@ class DecayConfig(BaseModel):
         description="Clustering protection strength for decay (0 = disabled)",
     )
     auto_consolidate_turns: int = Field(default=5, ge=0, description="Interval in turns for automatic REM consolidation")
+
+    # --- Unified search & reranking (Phase A/C/D) ---
+    always_search_cold: bool = Field(
+        default=True,
+        description="Search Cold ROM in parallel with Hot, ignoring the theta gate.",
+    )
+    rrf_k: int = Field(default=60, ge=1, description="RRF constant k (higher = less weight to top ranks)")
+    rerank_top_k: int = Field(default=20, gt=0, description="Max records surviving reranking into prompt")
+    recency_boost: float = Field(default=0.0, ge=0.0, description="Additive RRF boost for recent records")
+    weight_signal: float = Field(default=0.0, ge=0.0, description="Additive RRF boost proportional to record weight")
+    exclude_invalidated: bool = Field(
+        default=True,
+        description="Exclude records with invalid_at set from normal search. When False, they are deprioritized by reranker instead.",
+    )
 
     def get_lambda_base(self, memory_type: MemoryType) -> float:
         match memory_type:
