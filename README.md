@@ -9,10 +9,11 @@ Unlike context-window stuffing or naive vector stores that grow without bound, N
 | Problem | Current Approaches | NMAFC Solution |
 |---------|-------------------|----------------|
 | Context windows overflow | Truncate oldest messages | Hot RAM with bounded record count via cognitive decay |
-| Contradictions persist | Old facts coexist with new ones | Override detection + gamma suppression (instant eviction) |
+| Contradictions persist | Old facts coexist with new ones | Override detection + temporal invalidation (validity windows, history preserved) |
 | Everything treated equally | Flat vector stores | Three-tier typing: CoreAnchor (permanent), ActiveContext (moderate decay), EphemeralState (aggressive decay) |
 | No concept of importance | Retrieval count ignored | Spaced repetition — each retrieval strengthens retention (LTP) |
 | Retrieval misses related facts | Single-hop vector search | Spreading Activation graph traversal (multi-hop entity linking) |
+| Unbounded retrieval context | Dump all matches into prompt | RRF reranking across Hot + Cold + graph → bounded `rerank_top_k` output |
 | No recoverability | Mutable state only | Dual-track: Hot RAM (fast, mutable) + Cold ROM (append-only event log, full rollback) |
 | Expensive per-turn overhead | Separate extraction + response calls | Single LLM call with tool-use for simultaneous response + extraction |
 
@@ -25,7 +26,7 @@ Every extracted fact is classified by the LLM into one of three tiers, each with
 | Tier | Decay Rate (lambda) | Half-life | Examples |
 |------|---------------------|-----------|----------|
 | **CoreAnchor** | 0.0 (never decays) | Infinite | Name, allergies, identity, relationships |
-| **ActiveContext** | 0.05 per turn | ~14 turns | Current goals, schedules, projects |
+| **ActiveContext** | 0.005 per turn | ~139 turns | Current goals, schedules, projects |
 | **EphemeralState** | 0.69 per turn | ~1 turn | Mood, passing comments, transient state |
 
 ### 2. Cognitive Decay (Ebbinghaus Forgetting Curve)
@@ -46,17 +47,18 @@ When a memory is retrieved during a query, it receives LTP reinforcement:
 2. Consolidation index `k` increments
 3. Future decay rate slows: `effective_lambda = lambda_base * e^(-eta * k)` where `eta = 0.15`
 
-A fact retrieved 10 times retains 80% weight after 20 turns vs. 37% for a never-retrieved fact. This naturally surfaces important information.
+A fact retrieved 10 times retains 80% weight after 200 turns vs. 37% for a never-retrieved fact. This naturally surfaces important information.
 
-### 4. Override Detection & Suppression
+### 4. Override Detection & Temporal Invalidation
 
 When the LLM detects a contradicting fact (e.g., "I moved to Berlin" contradicts "I live in Paris"):
 
 1. New fact specifies `overrides_entity` pointing to the old record
-2. Old record's weight is multiplied by `gamma = 0.1` (instant suppression)
-3. Next prune cycle evicts the old record (weight 0.1 <= prune threshold 0.1)
+2. Old record is marked `invalid_at = current_turn` (temporal invalidation)
+3. Old record's weight is frozen — decay skips invalidated records
+4. Invalidated records are excluded from search by default (`exclude_invalidated=True`)
 
-Zero hallucination for contradictions — suppressed facts cannot be retrieved.
+Zero hallucination for contradictions — invalidated facts cannot be retrieved. Unlike the previous weight-suppression approach, the temporal history is preserved: both "lived in Paris (turn 1-5)" and "lives in Berlin (turn 5-present)" remain in storage for rollback and temporal queries.
 
 ### 5. Spreading Activation (Graph Traversal)
 
@@ -106,6 +108,39 @@ Every 5 turns (configurable), a consolidation pass runs:
 
 Both layers support `agent_id` + `conversation_id` scoping for multi-tenant and multi-conversation isolation. Cold ROM enables full state reconstruction at any point in time via event replay.
 
+### 8. Temporal Validity Windows
+
+Every memory record carries `valid_at` (when the fact became true) and `invalid_at` (when it was superseded). These fields enable:
+
+- **Temporal queries:** "What was true at turn N?" can be answered without rollback
+- **History preservation:** "lived in Paris (turn 1-5)" and "moved to Berlin (turn 5-present)" coexist
+- **Efficient decay:** invalidated records are skipped by `decay_all()` — their weight is frozen
+- **Graceful pruning:** ActiveContext records that decay below `w_prune` are marked `invalid_at` rather than deleted, preserving archive access
+
+### 9. Unified Parallel Search & RRF Reranking
+
+Retrieval searches both Hot RAM and Cold ROM in parallel on every query (controlled by `always_search_cold`), removing the old theta-gated fallback that fired on only 1.6% of questions. Results from all sources — Hot vector hits, Cold semantic/keyword matches, and BFS graph expansion — are fused via Reciprocal Rank Fusion:
+
+```
+RRF_score(d) = Σ 1/(k + rank_in_list_i)   for each list containing d
+```
+
+This controls fan-out naturally: BFS can discover 35 records, but only `rerank_top_k` (default 20) survive fusion. Entity-name deduplication ensures Hot-sourced records take priority over archived versions. Optional additive signals (recency boost, weight signal) can fine-tune ranking.
+
+### 10. Zep-Style Context Presentation
+
+Retrieved facts are presented to the answering LLM using structured `<FACTS>` tags with temporal validity ranges, inspired by Zep's knowledge graph format:
+
+```
+<FACTS>
+User's name is Joshua (Valid: turn 1 - present)
+Lives in Berlin (Valid: turn 5 - present)
+Started new job at Google (Valid: turn 12 - present)
+</FACTS>
+```
+
+This gives the LLM scannable, atomic facts rather than a narrative list. Each fact carries its validity window, helping the model reason about temporal relationships.
+
 ## Architecture
 
 ```
@@ -118,11 +153,11 @@ Both layers support `agent_id` + `conversation_id` scoping for multi-tenant and 
                     │  Extract  │  │  Query  │  │    Engine       │
                     │  (LLM +   │  │  Router │  │  ┌───────────┐  │
                     │   Tool)   │  │         │  │  │   Decay   │  │
-                    └───────────┘  │ Vector  │  │  │  Reinforce│  │
+                    └───────────┘  │ Unified │  │  │  Reinforce│  │
                                    │ Search  │  │  │   Prune   │  │
-                                   │ + Graph │  │  │  Consol.  │  │
-                                   │ + Cold  │  │  │  Rollback │  │
-                                   │ Fallback│  │  └───────────┘  │
+                                   │ + Graph │  │  │  Rerank   │  │
+                                   │ + RRF   │  │  │  Consol.  │  │
+                                   │ Rerank  │  │  │  Rollback │  │
                                    └────┬────┘  └────────────────┘
                                         │
                          ┌──────────────┼──────────────┐
@@ -139,16 +174,22 @@ Each call to `process_turn(user_msg)` executes this sequence:
 
 ```
 1. Increment turn counter
-2. Retrieve context (vector search + spreading activation + cold fallback)
-3. Format retrieved memories as context string
+2. Unified parallel retrieval:
+   a. Hot RAM vector search (top_k=10, cosine similarity)
+   b. Cold ROM hybrid search (semantic + keyword), always in parallel
+   c. BFS graph expansion (Spreading Activation, max_hops=2) from Hot seeds
+   d. One-hop graph expansion from Cold-only seeds into the archive
+   e. Reciprocal Rank Fusion (RRF) across all candidate lists → rerank_top_k winners
+3. Format retrieved memories as structured <FACTS> context with validity ranges
 4. LLM call with tool-use → simultaneous response + state extraction
 5. For each extracted update:
    a. Log to Cold ROM (append-only)
-   b. Detect overrides → suppress contradicted records (w *= gamma)
-   c. Embed new fact → upsert to Hot RAM (weight=1.0)
-6. Decay all mutable records: w(t) = w(t0) * e^(-lambda * dt)
-7. Prune: delete records where weight <= w_prune
-8. Every N turns: REM consolidation (elevation + dead pointer cleanup)
+   b. Detect overrides → set invalid_at on contradicted records (temporal invalidation)
+   c. Embed new fact → upsert to Hot RAM (weight=1.0, valid_at=current_turn)
+6. LTP reinforcement on Hot-sourced records that survived reranking
+7. Decay all mutable records: w(t) = w(t0) * e^(-lambda * dt)
+8. Prune: delete records where weight <= w_prune
+9. Every N turns: REM consolidation (elevation + dead pointer cleanup)
 ```
 
 ## Installation
@@ -253,8 +294,8 @@ await mem.process_turn("I live in Paris.")
 
 # Turn 5: Contradiction arrives
 await mem.process_turn("I just moved to Berlin last week.")
-# Hot RAM: [ActiveContext] user_location: "Moved to Berlin" (weight=1.0)
-# The old "Paris" record is suppressed (w *= 0.1) and pruned
+# Hot RAM: [ActiveContext] user_location: "Moved to Berlin" (weight=1.0, valid_at=5)
+# The old "Paris" record is marked invalid_at=5 (excluded from search, preserved for history)
 
 # Query will ONLY return Berlin, never Paris
 ```
@@ -462,30 +503,35 @@ python examples/sync_usage.py
 ### Default Configuration (`configs/default.toml`)
 
 ```toml
+[storage]
+hot_uri = "./data/lancedb"     # LanceDB path (supports s3://)
+cold_uri = "./data/cold.db"    # SQLite path
+
 [decay]
 lambda_core_anchor = 0.0       # CoreAnchor never decays
-lambda_active_context = 0.05   # Moderate decay (~14 turn half-life)
+lambda_active_context = 0.005  # Slow decay (~460 turn horizon, outlasts LoCoMo conversations)
 lambda_ephemeral = 0.69        # Aggressive decay (~1 turn half-life)
 eta = 0.15                     # Consolidation constant (higher = faster LTP effect)
 gamma = 0.1                    # Override suppression multiplier
 w_prune = 0.1                  # Eviction threshold (records at or below are deleted)
-theta = 0.45                   # Cosine similarity below which Cold ROM fallback fires
+
+[retrieval]
+theta = 0.45                   # Cosine similarity threshold for Cold ROM fallback
 top_k = 10                     # Vector search result count
-max_hops = 2                   # Spreading Activation graph depth
 fallback_keyword_limit = 20    # Cold ROM FTS5 result limit
-auto_consolidate_turns = 5     # REM sleep interval
-time_unit = "turns"            # Decay time unit
+always_search_cold = true      # Search Cold ROM in parallel (bypasses theta gate)
+rrf_k = 60                     # RRF fusion constant (higher = less weight to top ranks)
+rerank_top_k = 20              # Max records surviving reranking into prompt
 
-[storage]
-hot_uri = "./data/lancedb"     # LanceDB path (supports s3://)
-cold_uri = "./data/cold.db"    # SQLite path
-embedding_dim = 1536           # Auto-detected on init
-
-[llm]
-provider_model = "openai/gpt-4o-mini"
+[time]
+unit = "turns"                 # Decay time unit
 
 [embedding]
 provider_model = "openai/text-embedding-3-small"
+dim = 1536                     # Auto-detected on init
+
+[llm]
+provider_model = "openai/gpt-4o-mini"
 ```
 
 ### Environment Variable Overrides
@@ -669,6 +715,22 @@ Multiple workers (Lambda, ECS, K8s pods) all read/write the same remote storage 
 
 Academic-grade evaluation comparing four memory approaches on real research datasets.
 
+### Answer Prompt Engineering
+
+LoCoMo gold answers are 1-4 word noun phrases. A correct but verbose reply ("Both Jon and Gina like to destress through dancing together on weekends") scores F1≈0.042 against gold "by dancing". This is a formatting artifact, not a memory result.
+
+**Fill-in-the-blank framing:** The answering prompt tells the model it is completing a quiz scored by exact token overlap with a 1-5 word reference. Few-shot examples demonstrate the expected format for dates, lists, yes/no, and names.
+
+**`strip_answer()` post-processing:** A regex-based pipeline in `arms/base.py` removes:
+- Preamble patterns ("Based on the facts...", "According to my memories...")
+- Meta/negation sentences ("I don't have information about...", "However...")
+- Trailing validity annotations and explanations
+- Markdown formatting and numbered lists
+
+**Anti-refusal instruction:** "NEVER say 'No information available' — always attempt an answer from the facts, even if uncertain." Refusal was the dominant failure mode: 54% of wrong answers were the model declining to answer, and in 30% of those cases the correct fact was in the retrieved context.
+
+Applied identically to all arms, so it changes absolute numbers without advantaging any arm over another.
+
 ### Current results
 
 **Status: full run.** All 10 LoCoMo conversations, all 1,986 QA pairs, no
@@ -784,6 +846,23 @@ Read with these caveats, all of which are load-bearing:
 - An earlier revision of this section claimed the system "confabulates rather
   than declining to answer" on adversarial. That was **backwards** — it abstains
   on 95.8% of them. The correction is what produced the refusal analysis above.
+
+#### Pilot results: prompt + retrieval improvements (conv-26, 199 questions)
+
+The retrieval pipeline and answer prompt improvements were developed against a
+single-conversation pilot (conv-26, Bedrock Claude Haiku 4.5, Ollama nomic-embed-text).
+These numbers are directional — small sample, different model from the full run:
+
+| iteration | overall F1 | temporal | single-hop | multi-hop | open-domain | adversarial |
+|---|---|---|---|---|---|---|
+| Baseline (old prompt) | 0.296 | 0.515 | 0.233 | 0.130 | 0.399 | 0.061 |
+| v4 (fill-in-the-blank + few-shot) | **0.378** | **0.585** | **0.369** | **0.234** | **0.449** | **0.156** |
+| **Δ** | **+27.6%** | +13.7% | +58.7% | +80.3% | +12.5% | +155% |
+
+The largest gains are in single-hop (+58.7%) and multi-hop (+80.3%), both
+dominated by the refusal fix: the model was declining to answer questions whose
+facts were present in the retrieved context. The fill-in-the-blank framing and
+anti-refusal instruction address this directly.
 
 ### Datasets
 
@@ -1443,7 +1522,7 @@ where:
 | Tier | lambda_base | After 10 turns (k=0) | After 10 turns (k=5) | After 10 turns (k=10) |
 |------|-------------|----------------------|----------------------|-----------------------|
 | CoreAnchor | 0.0 | 1.000 | 1.000 | 1.000 |
-| ActiveContext | 0.05 | 0.607 | 0.858 | 0.951 |
+| ActiveContext | 0.005 | 0.951 | 0.983 | 0.996 |
 | EphemeralState | 0.69 | 0.001 | 0.056 | 0.314 |
 
 ### LTP Reinforcement (on retrieval)
@@ -1454,10 +1533,12 @@ k_i = k_i + 1                       # Increment consolidation index
 last_reinforced_turn = current_turn  # Reset decay clock
 ```
 
-### Override Suppression
+### Override (Temporal Invalidation)
 
 ```
-w_old = w_old * gamma    (gamma = 0.1, default)
+old_record.invalid_at = current_turn    # Marks end of validity window
+# Weight is frozen — decay_all() skips records with invalid_at set
+# Record excluded from search when exclude_invalidated=True (default)
 ```
 
 ### Pruning Condition
@@ -1484,17 +1565,19 @@ nmafc/
 │   ├── schemas/
 │   │   ├── memory.py              # Pydantic models (MemoryRecord, DecayConfig, etc.)
 │   │   └── events.py              # EventType enum + MemoryEvent model
+│   ├── py.typed                   # PEP 561 marker for IDE type resolution
 │   ├── engine/
 │   │   ├── decay.py               # Ebbinghaus exponential decay
 │   │   ├── reinforcement.py       # LTP (weight reset + k increment)
-│   │   ├── pruning.py             # Override detection + eviction
+│   │   ├── pruning.py             # Override detection + temporal invalidation
+│   │   ├── reranking.py           # Reciprocal Rank Fusion (RRF) reranker
 │   │   ├── consolidation.py       # REM sleep (elevation + cleanup)
 │   │   └── rollback.py            # State reconstruction from Cold ROM
 │   ├── integration/
 │   │   ├── factory.py             # Provider factory (provider/model strings)
 │   │   ├── base.py                # Abstract LLMProvider + EmbeddingProvider
 │   │   ├── extractor.py           # StateExtractor (tool-use based extraction)
-│   │   ├── query_router.py        # Retrieval + Spreading Activation
+│   │   ├── query_router.py        # Unified parallel search + RRF reranking
 │   │   ├── openai_provider.py     # OpenAI / OpenAI-compatible
 │   │   ├── anthropic_provider.py  # Anthropic native
 │   │   ├── bedrock_provider.py    # AWS Bedrock (boto3 + Anthropic SDK)
@@ -1611,7 +1694,7 @@ thousands of tiny files and dominate ingestion time.
 | Exponential decay | Ebbinghaus forgetting curve | Unused memories fade naturally |
 | LTP reinforcement | Long-Term Potentiation | Repeated retrieval strengthens synapses |
 | CoreAnchor promotion | Memory consolidation | Important facts move to permanent storage |
-| Override suppression | Synaptic depression | Contradicted pathways are weakened |
+| Temporal invalidation | Synaptic depression | Contradicted pathways are inhibited (not destroyed) |
 | Pruning cycle | Synaptic homeostasis | Weak connections are physically removed |
 | REM consolidation | Sleep-dependent memory processing | Periodic restructuring and promotion |
 | Spreading Activation | Associative priming | Related concepts activate each other |

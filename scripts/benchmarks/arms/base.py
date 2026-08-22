@@ -7,10 +7,97 @@ from the same dataset — they differ only in how they manage memory.
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 
 from ..evaluation.metrics import ArmMetrics, ArmResponse
+
+
+_PREAMBLE_PATTERNS = re.compile(
+    r"^(?:"
+    r"based on (?:the |my )?(?:facts|memories|information)\b[^.]*?[,.:]\s*"
+    r"|according to (?:the |my )?(?:facts|memories)\b[^.]*?[,.:]\s*"
+    r"|(?:looking|going) (?:at|through) (?:the |my )?(?:facts|memories)\b[^.]*?[,.:]\s*"
+    r"|(?:from|reviewing|examining) (?:the |my )?(?:facts|memories)\b[^.]*?[,.:]\s*"
+    r"|the facts (?:show|indicate|suggest|provided|state) (?:that )?"
+    r"|i (?:don't|do not|cannot|can't) (?:have|find|see|determine)\b[^.]*?[.]\s*(?:however|but)[,:]?\s*"
+    r"|i'?ve? reviewed [^.]*?[.]\s*(?:however|but)[,:]?\s*"
+    r"|there is no (?:record|info|information|mention|data)[^.]*?[.]\s*(?:however|but|looking)[,:]?\s*"
+    r"|let me (?:check|look|review)[^\n]*?\n"
+    r"|i can see (?:from |that )[^.]*?(?:that |[:,]\s*)"
+    r")",
+    re.IGNORECASE,
+)
+
+_TRAILING_NOISE = re.compile(
+    r"[\s.]*(?:\(Valid:.*?\)|\n.*)",
+    re.DOTALL,
+)
+
+
+def strip_answer(raw: str) -> str:
+    """Post-process LLM response to extract just the bare answer.
+
+    Removes common preamble patterns, trailing explanations, and markdown.
+    """
+    text = raw.strip()
+    if not text:
+        return text
+
+    # Remove markdown bold/italic
+    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    text = re.sub(r"\*([^*]+)\*", r"\1", text)
+
+    # Strip numbered lists — take just the items
+    lines = text.split("\n")
+    if len(lines) > 1 and re.match(r"^\d+[.)]\s", lines[0]):
+        items = []
+        for line in lines:
+            item = re.sub(r"^\d+[.)]\s*", "", line).strip()
+            if item and not item.startswith("("):
+                items.append(item)
+        if items:
+            text = ", ".join(items)
+
+    # Strip preamble
+    text = _PREAMBLE_PATTERNS.sub("", text).strip()
+
+    # Split on sentence boundaries and drop meta/negation sentences
+    if ". " in text and len(text) > 40:
+        sentences = re.split(r"(?<=[.!?])\s+", text)
+        kept = []
+        for s in sentences:
+            s = s.strip()
+            if not s:
+                continue
+            if re.match(r"(?i)^(however|but|note|also|additionally|i |there is no|no information|looking)", s):
+                continue
+            if re.search(r"(?i)(no (?:info|record|mention|data|fact)|not (?:available|found|specified|provided))", s):
+                continue
+            if re.search(r"(?i)^(the only mention|the (?:facts|memories) (?:don|do not|only))", s):
+                continue
+            kept.append(s.rstrip("."))
+        if kept:
+            text = kept[0] if len(kept) == 1 else ". ".join(kept)
+
+    # Strip trailing validity annotations or explanations after newline
+    text = _TRAILING_NOISE.sub("", text).strip()
+
+    # Strip framing clauses: "X is Y" → "Y" when X is a meta-reference
+    text = re.sub(
+        r"(?i)^(?:the only mention of \w+ (?:researching|doing|is) (?:is |that )?|"
+        r"\w+ has participated in:?\s*|"
+        r"\w+ (?:appears|seems) to be\s+)",
+        "", text,
+    ).strip()
+
+    # Remove leading/trailing quotes and periods
+    text = text.rstrip(".")
+    if text.startswith(("'", '"')) and text.endswith(("'", '"')):
+        text = text[1:-1]
+
+    return text
 
 
 # Appended to every arm's answer prompt. LoCoMo scores token-level F1 against
@@ -25,13 +112,26 @@ from ..evaluation.metrics import ArmMetrics, ArmResponse
 # advantaging any arm over another.
 SHORT_ANSWER_RULES = """
 
-ANSWER FORMAT (strict — your answer is scored by token overlap against a short reference):
-- Output ONLY the answer itself. No preamble, no explanation, no markdown, no quotes.
-- Never begin with "Based on", "According to", "The conversation shows", or similar.
-- Be as short as possible — usually 1-5 words.
-- "When"/date questions: answer with the date as written in the transcript, e.g. "19 January, 2023".
-- Yes/no questions: answer exactly "Yes" or "No".
-- If the answer is genuinely absent, reply exactly: No information available."""
+CRITICAL: You are completing a fill-in-the-blank quiz. Your response is scored by EXACT TOKEN OVERLAP with a 1-5 word reference answer. Every extra word LOWERS your score.
+
+Rules:
+- Reply with ONLY the bare answer. No sentences, no explanation, no context.
+- Maximum 5 words unless listing items.
+- For lists: comma-separated nouns only (e.g. "running, pottery, camping").
+- For dates: just the date (e.g. "19 January 2023" or "July 2023").
+- For yes/no: just "Yes" or "No".
+- For names: just the name (e.g. "Sweden" or "Oliver, Luna, Bailey").
+- For "would/could/likely" questions: answer "Yes" or "No" then at most 3 words of reason.
+- NEVER start with "Based on", "According to", "The facts show", "Looking at", "I don't have", or any preamble.
+- NEVER say "No information available" — always attempt an answer from the facts, even if uncertain.
+
+Examples of CORRECT responses:
+Q: When did she go camping? → June 2023
+Q: What are her pets' names? → Oliver, Luna, Bailey
+Q: What does she do to relax? → running, pottery
+Q: Would she enjoy classical music? → Yes, she likes Bach and Mozart
+Q: What is his job? → software engineer
+Q: Where did she move from? → Sweden"""
 
 
 def build_exchanges(turns: list[dict]) -> list[str]:

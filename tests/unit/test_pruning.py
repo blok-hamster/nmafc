@@ -137,8 +137,26 @@ class TestPruneCycle:
         return hot, cold
 
     def test_prunes_below_threshold(self, storage):
+        """ActiveContext below threshold is invalidated (not deleted); EphemeralState is deleted."""
         hot, cold = storage
         r_low = make_record("low", weight=0.05)
+        r_high = make_record("high", weight=0.8)
+        hot.upsert(r_low, make_embedding(0.1))
+        hot.upsert(r_high, make_embedding(0.2))
+        assert hot.count() == 2
+
+        pruned = prune_cycle(hot, cold, w_prune=0.1, current_turn=5)
+        assert pruned == 1
+        # ActiveContext is invalidated not deleted — still in store but with invalid_at set
+        assert hot.count() == 2
+        invalidated = hot.get_record(r_low.id)
+        assert invalidated is not None
+        assert invalidated.invalid_at == 5
+
+    def test_prunes_ephemeral_below_threshold(self, storage):
+        """EphemeralState below threshold is physically deleted."""
+        hot, cold = storage
+        r_low = make_record("low", weight=0.05, memory_type=MemoryType.EPHEMERAL_STATE)
         r_high = make_record("high", weight=0.8)
         hot.upsert(r_low, make_embedding(0.1))
         hot.upsert(r_high, make_embedding(0.2))
