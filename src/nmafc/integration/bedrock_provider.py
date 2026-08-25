@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, cast
 
@@ -142,6 +143,33 @@ class BedrockProvider(LLMProvider):
 
         return response_text, updates
 
+    async def chat(self, messages: list[dict], system_prompt: str) -> str:
+        """Plain chat without tool schema for clean QA responses."""
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, self._sync_chat, messages, system_prompt
+        )
+
+    def _sync_chat(self, messages: list[dict], system_prompt: str) -> str:
+        bedrock_messages = []
+        for msg in messages:
+            bedrock_messages.append({
+                "role": msg["role"],
+                "content": [{"text": msg["content"]}],
+            })
+
+        response = self._client.converse(
+            modelId=self._model_id,
+            system=[{"text": system_prompt}],
+            messages=bedrock_messages,
+        )
+
+        output = response["output"]["message"]
+        parts = [block["text"] for block in output.get("content", []) if "text" in block]
+        return "".join(parts)
+
 
 class BedrockAnthropicProvider(LLMProvider):
     """AWS Bedrock provider using the Anthropic SDK's native Bedrock client.
@@ -218,6 +246,29 @@ class BedrockAnthropicProvider(LLMProvider):
                     continue
 
         return response_text, updates
+
+    async def chat(self, messages: list[dict], system_prompt: str) -> str:
+        """Plain chat without tool schema for clean QA responses."""
+        response = None
+        for attempt in range(10):
+            try:
+                response = await self._client.messages.create(
+                    model=self._model_id,
+                    max_tokens=4096,
+                    system=system_prompt,
+                    messages=cast(Any, messages),
+                )
+                break
+            except Exception as exc:
+                if attempt == 9:
+                    raise exc
+                await asyncio.sleep(min(30.0, 1.5 * (2.0 ** attempt)))
+
+        if response is None:
+            return ""
+
+        parts = [block.text for block in response.content if block.type == "text"]
+        return "".join(parts)
 
 
 class BedrockEmbedding(EmbeddingProvider):

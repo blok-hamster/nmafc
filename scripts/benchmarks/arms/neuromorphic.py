@@ -131,7 +131,7 @@ class NeuromorphicArm(BenchmarkArm):
         if memory_context:
             system += f"\n\n{memory_context}"
 
-        response_text, _ = await self._llm.chat_with_extraction(
+        response_text = await self._llm.chat(
             messages=[{"role": "user", "content": question}],
             system_prompt=system,
         )

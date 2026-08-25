@@ -100,6 +100,18 @@ class AnthropicProvider(LLMProvider):
 
         return response_text, updates
 
+    async def chat(self, messages: list[dict], system_prompt: str) -> str:
+        """Plain chat without tool schema for clean QA responses."""
+        response = await self._client.messages.create(
+            model=self._model,
+            max_tokens=4096,
+            system=system_prompt,
+            messages=cast(Any, messages),
+        )
+
+        parts = [block.text for block in response.content if block.type == "text"]
+        return "".join(parts)
+
 
 class AnthropicEmbedding(EmbeddingProvider):
     """Embedding provider using OpenAI (Anthropic has no native embedding API)."""

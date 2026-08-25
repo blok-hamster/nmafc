@@ -21,6 +21,11 @@ class LLMProvider(ABC):
         """
         ...
 
+    async def chat(self, messages: list[dict], system_prompt: str) -> str:
+        """Plain chat without tool schema. Override in subclasses for clean QA."""
+        text, _ = await self.chat_with_extraction(messages, system_prompt)
+        return text
+
 
 class EmbeddingProvider(ABC):
     """Abstract interface for text embedding providers."""

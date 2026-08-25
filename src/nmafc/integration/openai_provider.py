@@ -136,6 +136,31 @@ class OpenAIProvider(LLMProvider):
 
         return response_text, updates
 
+    async def chat(self, messages: list[dict], system_prompt: str) -> str:
+        """Plain chat without tool schema for clean QA responses."""
+        full_messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt}, *messages
+        ]
+
+        extra: dict[str, Any] = {}
+        if self._temperature is not None:
+            extra["temperature"] = self._temperature
+
+        for attempt in range(10):
+            try:
+                response: Any = await self._client.chat.completions.create(
+                    model=self._model,
+                    messages=cast(Any, full_messages),
+                    **extra,
+                )
+                return response.choices[0].message.content or ""
+            except Exception as exc:
+                if attempt == 9:
+                    raise exc
+                await asyncio.sleep(min(30.0, 1.5 * (2.0 ** attempt)))
+
+        return ""
+
 
 class OpenAIEmbedding(EmbeddingProvider):
     """OpenAI-compatible text embedding provider."""

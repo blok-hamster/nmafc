@@ -180,7 +180,7 @@ class RagArm(BenchmarkArm):
         if context:
             system += f"\n\n=== RETRIEVED EXCERPTS ===\n{context}\n=== END EXCERPTS ==="
 
-        response_text, _ = await self._llm.chat_with_extraction(
+        response_text = await self._llm.chat(
             messages=[{"role": "user", "content": question}],
             system_prompt=system,
         )

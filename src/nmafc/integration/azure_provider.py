@@ -88,6 +88,24 @@ class AzureOpenAIProvider(LLMProvider):
 
         return response_text, updates
 
+    async def chat(self, messages: list[dict], system_prompt: str) -> str:
+        """Plain chat without tool schema for clean QA responses."""
+        from typing import Any, cast
+
+        full_messages = [{"role": "system", "content": system_prompt}, *messages]
+
+        extra: dict[str, Any] = {}
+        if self._temperature is not None:
+            extra["temperature"] = self._temperature
+
+        response = await self._client.chat.completions.create(
+            model=self._deployment,
+            messages=cast(Any, full_messages),
+            **extra,
+        )
+
+        return response.choices[0].message.content or ""
+
 
 class AzureOpenAIEmbedding(EmbeddingProvider):
     """Azure OpenAI embedding provider."""

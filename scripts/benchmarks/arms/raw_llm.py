@@ -64,7 +64,7 @@ class RawLLMArm(BenchmarkArm):
         system = ANSWER_SYSTEM_PROMPT + "\n\n" + CONTEXT_PREFIX + history_text + CONTEXT_SUFFIX
 
         start = time.perf_counter()
-        response_text, _ = await self._llm.chat_with_extraction(
+        response_text = await self._llm.chat(
             messages=[{"role": "user", "content": question}],
             system_prompt=system,
         )

@@ -172,7 +172,7 @@ class NeuromorphicTunedArm(BenchmarkArm):
         if memory_context:
             system += f"\n\n{memory_context}"
 
-        response_text, _ = await self._llm.chat_with_extraction(
+        response_text = await self._llm.chat(
             messages=[{"role": "user", "content": question}],
             system_prompt=system,
         )
@@ -190,6 +190,13 @@ class NeuromorphicTunedArm(BenchmarkArm):
         )
         self.metrics.record(response)
         return response
+
+    def update_storage_metrics(self) -> None:
+        if self._memory:
+            stats = self._memory.get_hot_stats()
+            self.metrics.hot_storage_records = stats.get("count", 0)
+            cold = self._memory.get_cold_stats()
+            self.metrics.cold_storage_events = cold.get("total_events", 0)
 
     def reset(self) -> None:
         """Reinitialize memory from scratch."""
