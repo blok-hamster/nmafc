@@ -244,25 +244,57 @@ class DecayConfig(BaseModel):
     # the archive scan (0.7 ms) put together, and the largest cost this system
     # controls.
     #
-    # Off by default because it is not free of consequence: a buffered
-    # reinforcement is invisible to any retrieval before the flush, so with
-    # `weight_signal` above zero a deferred run can rank differently from an
-    # immediate one. At `weight_signal = 0` (the default) weight does not enter
-    # ranking and the two are equivalent, which is the regime the benchmark runs
-    # in. Callers that turn this on must flush before any decay pass, since
-    # decay reads the weight and the consolidation index this would be holding.
+    # On by default. Measured over 240 retrievals against a copy of a finished
+    # LoCoMo store, immediate writeback costs a mean of 501 ms per retrieval
+    # against 300 ms deferred, and the gap widens as the run goes on -- 420 ms
+    # over the first forty queries and 561 ms over the last eighty, because the
+    # tombstoned fragments accumulate. Deferred is flat across the same span
+    # (307, 287, 308, 294). About 260 ms of both figures is the embedding call,
+    # so what this removes is roughly six times the rest of the local work put
+    # together, and it is the only part that grows.
+    #
+    # It is not free of consequence: a buffered reinforcement is invisible to
+    # any retrieval before the flush, so with `weight_signal` above zero a
+    # deferred run can rank differently from an immediate one. At
+    # `weight_signal = 0` (the default) weight does not enter ranking and the
+    # two are equivalent. Set False to restore per-query writeback.
+    #
+    # Nothing is lost by leaving it on. Decay, `maintain()` and `close()` all
+    # flush first, and `reinforcement_buffer_limit` bounds a caller that reaches
+    # none of them.
     defer_reinforcement_writes: bool = Field(
-        default=False,
+        default=True,
         description="Buffer LTP writebacks until flush_reinforcements() is called",
+    )
+    reinforcement_buffer_limit: int = Field(
+        default=256,
+        gt=0,
+        description="Flush buffered LTP writebacks once this many records are held",
     )
     rrf_k: int = Field(default=60, ge=1, description="RRF constant k (higher = less weight to top ranks)")
     rerank_top_k: int = Field(default=20, gt=0, description="Max records surviving reranking into prompt")
-    # Measured over 250 prompts at rerank_top_k=40: the validity suffix was 21%
-    # of the context, and 10,000 of 10,000 suffixes ended "- present" because
-    # nothing in the store had been invalidated. Rendering the span only when a
-    # fact has an end date returns that budget to the facts themselves.
+    # Drops three things that cost tokens without carrying information: the
+    # word "Valid:", the "- present" suffix, and the clock time on a session
+    # timestamp. Measured over 200 prompts on the finished LoCoMo stores, the
+    # validity span was 227 tokens of a 1,124-token context (20.2%), all 4,000
+    # suffixes in the sample ended "- present" because nothing in those stores
+    # had been invalidated, and the clock time was 11.2 characters of a 25.8-
+    # character date on a benchmark where no question asks the hour. Compact
+    # renders 982 tokens against 1,124: 142 fewer, 12.6%.
+    #
+    # No information leaves the prompt. The date survives in full and an end
+    # date is still rendered when a fact has one, which is the only case where
+    # the range is doing any work.
+    #
+    # On by default on a paired A/B over 1,537 questions, both arms reading the
+    # same stores with the same retrieval and the same judge: 66.23% verbose
+    # against 66.10% compact, 37 fixed and 39 broken, McNemar p = 0.91, at
+    # 1,137 tokens against 997. The honest reading of that is not "identical"
+    # but "any real effect is inside +/-1.2 points", and 12.4% of the context
+    # is a certain saving against an unmeasurable cost. Set False to restore
+    # the full span, which is what the 66.95% headline run rendered.
     compact_validity: bool = Field(
-        default=False,
+        default=True,
         description="Render validity as '(date)' rather than '(Valid: date - present)'",
     )
     # Extraction is lossy, and on 1,540 LoCoMo questions the loss is

@@ -66,6 +66,21 @@ from .resilience import (
 )
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    """A boolean switch read from the environment, defaulting to the config.
+
+    Unset means "whatever the library ships", so the benchmark cannot drift
+    away from the configuration its own numbers are meant to describe. Set,
+    it is read as a word rather than as truthiness: an env var holding the
+    string "0" or "false" is the standard way of saying off, and treating it
+    as on because it is a non-empty string is the usual way that goes wrong.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"", "0", "false", "no", "off"}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run LoCoMo benchmark suite")
     parser.add_argument(
@@ -241,14 +256,18 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--defer-reinforcement",
-        action="store_true",
-        default=bool(os.environ.get("NMAFC_BENCH_DEFER_REINFORCEMENT")),
+        action=argparse.BooleanOptionalAction,
+        default=_env_flag("NMAFC_BENCH_DEFER_REINFORCEMENT",
+                          DecayConfig().defer_reinforcement_writes),
         help=(
-            "Buffer LTP writebacks and commit them between conversations (env: "
-            "NMAFC_BENCH_DEFER_REINFORCEMENT). Measured at ~650 ms per question "
-            "on a 494-record store, the largest cost the system controls. Safe "
-            "at the default weight_signal of 0, where weight does not enter "
-            "ranking; above 0 a deferred run can rank differently."
+            "Buffer LTP writebacks and commit them on a bound (env: "
+            "NMAFC_BENCH_DEFER_REINFORCEMENT). On by default, matching the "
+            "DecayConfig default. Measured over 240 retrievals against a copy "
+            "of a finished store: 501 ms per retrieval immediate and rising "
+            "with the run, 300 ms deferred and flat. Pass "
+            "--no-defer-reinforcement for the ablation. Safe at the default "
+            "weight_signal of 0, where weight does not enter ranking; above 0 "
+            "a deferred run can rank differently."
         ),
     )
     parser.add_argument(
@@ -464,8 +483,10 @@ def build_decay_overrides(args) -> dict:
         overrides["rerank_top_k"] = args.rerank_top_k
     if args.fallback_keyword_limit is not None:
         overrides["fallback_keyword_limit"] = args.fallback_keyword_limit
-    if args.defer_reinforcement:
-        overrides["defer_reinforcement_writes"] = True
+    # Set either way, not only when true: the config default is now True, so
+    # "absent" can no longer stand in for "off" and --no-defer-reinforcement
+    # has to be able to reach the arm.
+    overrides["defer_reinforcement_writes"] = bool(args.defer_reinforcement)
     return overrides
 
 

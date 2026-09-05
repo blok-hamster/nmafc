@@ -10,7 +10,7 @@ otherwise.
 ## The short version
 
 The framework started 5.9 points behind a plain RAG baseline. It now scores
-ahead of it on 22% less context.
+level with it on a third less context.
 
 | date | run | ours | RAG | our context |
 |---|---|---|---|---|
@@ -22,6 +22,11 @@ ahead of it on 22% less context.
 That is **+12.6 points** overall. The last row is a full run on the standard
 protocol, not an A/B delta, and against the previous run it is paired on 1,529
 shared questions: **120 fixed, 64 broken, McNemar p = 4.4e-05.**
+
+Since that run the prompt has lost another 12.4% to `compact_validity`, at no
+measurable cost over 1,537 paired questions (66.23% → 66.10%, p = 0.91). The
+shipped configuration now renders **997 tokens against RAG's 1,454**, which is
+where "a third less context" comes from. See *Cost, not score*.
 
 Two warnings about how to read that table, and the second matters more than the
 first.
@@ -282,6 +287,100 @@ instructions are not where the headroom is.
 
 ---
 
+## Cost, not score
+
+Two things that buy nothing on the leaderboard and matter anyway.
+
+### The prompt is 12.4% smaller for nothing
+
+Broken down over 200 prompts on the finished stores, the context was not mostly
+facts:
+
+```
+tokens per prompt      1,124
+  fact text              498   44.3%
+  "(Valid: ... )"        227   20.2%
+  SOURCE block + tags    389   34.6%
+```
+
+A fifth of it was the validity span, and **4,000 of 4,000 spans in that sample
+ended `- present`**, because nothing in these stores has ever been invalidated.
+Every line was paying for a word that was true of every line. The clock time on
+a session timestamp is the same kind of cost: 11.2 characters of a 25.8-
+character date, on a benchmark where nothing asks the hour.
+
+`compact_validity` drops the label, the open end and the clock, and takes the
+context to 982 tokens. The date survives in full, and a fact that really was
+superseded still renders its end date.
+
+Tested rather than assumed, because "shorter" and "better" are not the same
+claim. Paired A/B, 1,537 questions, both arms on the same stores with the same
+retrieval and the same judge:
+
+```
+                    correct              context
+A  verbose span    1018   66.23%        1,137 tok
+B  compact span    1016   66.10%          997 tok
+   delta             -2   -0.13 pts       -141 tok  (-12.4%)
+
+fixed 37   broke 39   McNemar p = 0.91
+```
+
+Read it as "any real effect is inside ±1.2 points", not as "identical". On by
+default because 12.4% is a certain saving against an unmeasurable cost. The
+SOURCE block keeps its headers exactly as stored: verbatim that has been edited
+is not verbatim.
+
+### Latency, and a number that was never what it looked like
+
+**The framework's own work is about 56 ms per question.** Split over 60
+questions:
+
+```
+region          mean      p50      p90    share
+embed            263      225      402   14.1%    <- network
+retrieve         319      312      469   17.0%
+format             0        0        1    0.0%
+generate        1289      765     1583   68.9%    <- network
+```
+
+The embedding call happens inside `retrieve`, so retrieve is 319 ms of which
+263 ms is waiting on the network. Everything this codebase controls — vector
+search, cold search, graph traversal, reranking, the hydration lookup,
+rendering — is the remainder. **83% of a question is waiting for a provider.**
+
+The one real saving available was `defer_reinforcement_writes`. Reinforcement
+rewrites every surviving record through a delete and an add, which on an
+append-only store appends a table version per query. Measured over 240
+retrievals against a *copy* of a finished store, same machine, same minute, one
+flag changed:
+
+```
+                mean      1-40   41-80   81-160  161-240
+immediate       501 ms     420     515      474      561   <- rises
+deferred        300 ms     307     287      308      294   <- flat
+```
+
+About 260 ms of both figures is the embedding call, so this removes roughly six
+times the rest of the local work put together, and it is the only part that
+grows as a run goes on. Now the default, with `reinforcement_buffer_limit` so a
+caller that only ever retrieves cannot accumulate writes that never land.
+
+**Do not read the run-to-run latency numbers as an improvement.** `full_v2`
+reports 21,306 ms per question and `full_v3` 2,159 ms, and almost all of that
+gap is a measurement change, not a code change: the runs before 4 September have
+no `throttle_ms` column at all, so their latency includes however long the
+shared provider quota made them queue. `full_v2` also ran two arms against one
+quota, and the 14 August run ran four including `raw_llm` at 20,000 tokens a
+question. The giveaway is the shape — a program getting slower rises across a
+run, and `full_v2` falls (29,660 → 12,398 ms) as the traffic clears, while
+`full_v3` is flat at ~2,100 ms throughout.
+
+So the honest claim is 200 ms of real saving, plus the end of a tenfold
+mismeasurement. Not a tenfold speedup.
+
+---
+
 ## Correctness fixes (no score effect, but they were real bugs)
 
 ### The clock guard
@@ -310,9 +409,10 @@ genuine recalls (values of 70, 277, 352 are eval artefacts), and
 `last_reinforced_turn` is stamped backwards as described above.
 
 The clock guard stops the corruption spreading. It does not repair existing
-stores. **Any script that touches these stores should pass
-`defer_reinforcement_writes=True`.** The `_ab_*` and `_sweep_*` helpers do. The
-`neuromorphic_tuned` arm does not, which is a known outstanding item.
+stores. **`defer_reinforcement_writes` now defaults to `True`**, so a script
+that touches a store no longer has to remember to ask, and the buffer flushes
+itself at `reinforcement_buffer_limit` records as well as on decay, `maintain()`
+and `close()`. Pass `--no-defer-reinforcement` for the ablation.
 
 `created_at_turn` and `memory_type` are the only clock fields the harness leaves
 intact.
@@ -357,8 +457,9 @@ All in `src/nmafc/schemas/memory.py`. Defaults preserve existing behaviour.
 | `rewire_pruned_links` | `False` | Reroute links around pruned records instead of severing them |
 | `rewire_max_links` | `8` | Cap on rewiring fan-out |
 | `rewire_max_depth` | `2` | Cap on rewiring search depth |
-| `defer_reinforcement_writes` | `False` | Buffer LTP writebacks until `flush_reinforcements()`. **Set `True` for read-only analysis.** |
-| `compact_validity` | `False` | Render validity as `(date)` rather than `(Valid: date - present)` |
+| `defer_reinforcement_writes` | `True` | Buffer LTP writebacks instead of writing on every query. 501 ms per retrieval immediate and rising, 300 ms deferred and flat |
+| `reinforcement_buffer_limit` | `256` | Flush the buffer once this many records are held, so a caller that only retrieves cannot lose writes |
+| `compact_validity` | `True` | Render validity as `(27 May 2023)` rather than `(Valid: 7:18 pm on 27 May, 2023 - present)`. 12.4% off the prompt |
 | `weight_signal` | `0.0` | RRF boost proportional to decay weight. Leave at 0, see above. |
 
 ---
@@ -456,6 +557,15 @@ All of them read `NMAFC_BENCH_PROVIDER` and the rest of the configuration from
   does not enter ranking, so the two are equivalent for retrieval. It changes
   what the stores look like afterwards, not what the model saw.
 
+- **We have never measured our latency against RAG's under the same
+  conditions.** Every comparison available is two different runs on two
+  different nights against a shared provider quota, and two runs of the
+  *identical* RAG arm came out 91% apart (4,694 ms and 2,460 ms). Structurally
+  both arms make the same two network calls and ours sends a 22% smaller
+  prompt, so a near-tie with a small edge to us is what the architecture
+  predicts — but that is reasoning, not a result. One run with both arms in the
+  same session would settle it.
+
 - The belief-update questions were mined from LoCoMo, which was not built to
   test belief updates. LongMemEval is the right dataset for that and has not
   been run.
@@ -469,18 +579,23 @@ Ranked by expected value, given everything above.
 ~~1. **Turn hydration on in the arm configs.**~~ Done, 5 September. It was the
 whole of the 63.31% -> 66.95% jump, together with the dates backfill.
 
-1. **Close the open-domain gap.** RAG leads by 5.7 points there and that is the
+1. **One run with both arms in it.** Everything comparing us to RAG right now is
+   two runs on two different nights, which is why the 0.78-point accuracy gap
+   and the 300 ms latency gap both have to be called ties. A single session
+   settles accuracy and latency at once, and the 12.4% the prompt just lost
+   buys some of the budget for it.
+2. **Close the open-domain gap.** RAG leads by 5.7 points there and that is the
    only category it still wins. Those questions want the passage, not the fact,
    which is exactly what hydration supplies, so raising `hydrate_top_k` above 5
    is the cheap thing to try first.
-2. **Fix `CoreAnchor` over-classification in the extractor.** Nothing about
+3. **Fix `CoreAnchor` over-classification in the extractor.** Nothing about
    forgetting can be evaluated properly until decay actually runs. Needs full
    re-ingestion (~5.3h) because `memory_type` is set at write time, so batch it
    with every other write-time change. Expect the LoCoMo number to go *down*.
-3. **LongMemEval.** LoCoMo rewards retrieval breadth, which is why breadth is
+4. **LongMemEval.** LoCoMo rewards retrieval breadth, which is why breadth is
    what wins here. A dataset built around belief updates would test the parts of
    this design that LoCoMo cannot.
-4. **Not** more work on the supersession detector. The failure there is not a
+5. **Not** more work on the supersession detector. The failure there is not a
    threshold or a prompt, it is that the signal does not exist in the
    embeddings.
 
@@ -490,7 +605,9 @@ whole of the 63.31% -> 66.95% jump, together with the dates backfill.
 
 ```bash
 python -m pytest tests/unit -q
-# 361 passed, 3 skipped
+# 368 passed, 3 skipped
 ```
 
-New: `test_link_resolution.py`, `test_link_rewiring.py`, `test_turn_dates.py`.
+New: `test_link_resolution.py`, `test_link_rewiring.py`, `test_turn_dates.py`,
+`test_deferred_reinforcement.py` -- the last of these because `defer_reinforcement_writes`
+had no test at all, which is why flipping its default broke nothing.

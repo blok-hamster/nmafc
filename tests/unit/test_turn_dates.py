@@ -147,16 +147,33 @@ def test_the_extractors_own_date_beats_the_turns(
     assert "15 May 2023" not in context
 
 
-def test_an_invalidated_fact_gets_a_dated_end(router: QueryRouter, cold: ColdStorage):
+@pytest.fixture
+def verbose_router(tmp_path: Path, cold: ColdStorage):
+    """The full "(Valid: from - to)" span, which is now the ablation."""
+    hot = HotStorage(StorageConfig(
+        hot_uri=str(tmp_path / "hot_verbose"),
+        cold_uri=str(tmp_path / "cold.db"),
+        embedding_dim=4,
+    ))
+    yield QueryRouter(
+        hot, cold, embedder=None, config=DecayConfig(compact_validity=False)
+    )
+
+
+def test_an_invalidated_fact_gets_a_dated_end(
+    verbose_router: QueryRouter, cold: ColdStorage
+):
     cold.record_turn_timestamp(5, "15 May 2023")
     cold.record_turn_timestamp(11, "2 June 2023")
-    context = router.format_context([record(turn=5, invalid_at=11)])
+    context = verbose_router.format_context([record(turn=5, invalid_at=11)])
     assert "15 May 2023 - 2 June 2023" in context
 
 
-def test_a_live_fact_still_reads_as_present(router: QueryRouter, cold: ColdStorage):
+def test_a_live_fact_still_reads_as_present(
+    verbose_router: QueryRouter, cold: ColdStorage
+):
     cold.record_turn_timestamp(5, "15 May 2023")
-    assert "- present" in router.format_context([record(turn=5)])
+    assert "- present" in verbose_router.format_context([record(turn=5)])
 
 
 def test_new_dates_are_picked_up_after_a_reset(router: QueryRouter, cold: ColdStorage):
@@ -184,13 +201,40 @@ def compact_router(tmp_path: Path, cold: ColdStorage):
 def test_compact_drops_the_label_and_the_open_end(
     compact_router: QueryRouter, cold: ColdStorage
 ):
-    """Measured at rerank_top_k=40, this suffix was 21% of the prompt and every
-    one of its 10,000 instances ended "- present"."""
+    """The span was 20.2% of a 1,124-token prompt and all 4,000 of its
+    instances in that sample ended "- present"."""
     cold.record_turn_timestamp(5, "15 May 2023")
     context = compact_router.format_context([record(turn=5)])
     assert "(15 May 2023)" in context
     assert "Valid:" not in context
     assert "present" not in context
+
+
+def test_compact_drops_the_clock_time(
+    compact_router: QueryRouter, cold: ColdStorage
+):
+    """A session timestamp is 25.8 characters of which 11.2 are the hour.
+
+    No LoCoMo question asks what time of day anything happened, and the date
+    behind the hour has to survive intact -- dropping the wrong half of the
+    stamp would cost the temporal category that hydration and dating just won.
+    """
+    cold.record_turn_timestamp(5, "7:18 pm on 27 May, 2023")
+    context = compact_router.format_context([record(turn=5)])
+    assert "(27 May, 2023)" in context
+    assert "7:18" not in context
+
+
+def test_compact_leaves_a_date_it_does_not_recognise_alone(
+    compact_router: QueryRouter, cold: ColdStorage
+):
+    """The extractor's own wording is not a timestamp and must not be edited.
+
+    "last summer" and "around March 2023" are the shapes that actually turn up
+    in valid_at_text. Only the one pattern the clock regex matches is touched.
+    """
+    context = compact_router.format_context([record(turn=5, text="last summer")])
+    assert "(last summer)" in context
 
 
 def test_compact_still_shows_an_end_where_there_is_one(
@@ -204,9 +248,13 @@ def test_compact_still_shows_an_end_where_there_is_one(
     assert "(15 May 2023 to 2 June 2023)" in context
 
 
-def test_compact_is_off_unless_asked_for(router: QueryRouter, cold: ColdStorage):
+def test_compact_is_on_by_default(router: QueryRouter, cold: ColdStorage):
+    """Paired over 1,537 questions: 66.23% verbose, 66.10% compact, p = 0.91,
+    at 1,137 tokens against 997. A certain 12.4% for an unmeasurable cost."""
     cold.record_turn_timestamp(5, "15 May 2023")
-    assert "(Valid: 15 May 2023 - present)" in router.format_context([record(turn=5)])
+    context = router.format_context([record(turn=5)])
+    assert "(15 May 2023)" in context
+    assert "Valid:" not in context
 
 
 # --- the verbatim evidence layer ------------------------------------------

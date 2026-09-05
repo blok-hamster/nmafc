@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import TYPE_CHECKING
 
 from nmafc.engine.reinforcement import reinforce
@@ -11,6 +12,9 @@ from nmafc.storage.hot import HotStorage
 
 if TYPE_CHECKING:
     from nmafc.storage.event_log import EventLog
+
+# Leading clock time on a session timestamp: "7:18 pm on 27 May, 2023".
+CLOCK_PREFIX = re.compile(r"^\d{1,2}:\d{2}\s*[ap]\.?m\.?\s+on\s+", re.I)
 
 
 class QueryRouter:
@@ -47,6 +51,16 @@ class QueryRouter:
     def reset_turn_dates(self) -> None:
         """Forget the cached turn dates, so newly ingested turns are picked up."""
         self._turn_dates = None
+
+    @staticmethod
+    def _day(stamp: str) -> str:
+        """A session timestamp with its clock time removed, if it has one.
+
+        Leaves anything else exactly as it came in: the extractor's own wording
+        ("last summer"), a turn number fallback, or a date that never carried a
+        time. Only the one shape it recognises is edited.
+        """
+        return CLOCK_PREFIX.sub("", stamp)
 
     def _date_for(self, turn: int | None) -> str | None:
         """The calendar date of a turn, or None if this store has no dates.
@@ -222,6 +236,15 @@ class QueryRouter:
                     new_k if held is None else held + 1
                 )
             self._pending_turn = max(self._pending_turn, current_turn)
+            # A caller that only ever retrieves reaches none of the three
+            # flush points -- decay, maintain, close -- so without a bound the
+            # buffer grows for the life of the process and the reinforcement it
+            # holds is never visible to anything. The bound turns "written on
+            # every query" into "written every few dozen queries", which is
+            # where the saving comes from, while keeping the buffer finite and
+            # its staleness capped at a known number of records.
+            if len(self._pending_reinforcements) >= self._config.reinforcement_buffer_limit:
+                self.flush_reinforcements()
         else:
             self._hot.apply_reinforcements(reinforcements, turn=current_turn)
 
@@ -386,7 +409,18 @@ class QueryRouter:
                 # anything it could not assume. An end date is only rendered
                 # when the fact actually has one, which is the only case where
                 # the range is doing work.
-                span = f"{valid_from} to {valid_to}" if valid_to else valid_from
+                #
+                # The clock time goes with them. A session timestamp reads
+                # "7:18 pm on 27 May, 2023" and the hour is 11.2 characters of
+                # the 25.8, on a benchmark where no question asks what time of
+                # day anything happened. Stripped only from the rendered
+                # validity: the SOURCE block keeps its headers as stored,
+                # because verbatim that has been edited is not verbatim.
+                span = (
+                    f"{self._day(valid_from)} to {self._day(valid_to)}"
+                    if valid_to
+                    else self._day(valid_from)
+                )
                 lines.append(f"{r.fact_content} ({span})")
             else:
                 lines.append(
