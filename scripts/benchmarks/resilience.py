@@ -28,6 +28,7 @@ concurrently draws from the same bucket.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import os
 import random
 import re
@@ -35,6 +36,39 @@ import time
 
 from nmafc.integration.base import EmbeddingProvider, LLMProvider
 from nmafc.schemas.memory import MemoryStateUpdate
+
+# Seconds this task has spent blocked on quota, not on work.
+#
+# An arm times its own answer_question with a stopwatch that spans the model
+# call, and the model call blocks in RateLimiter.acquire() before it sends
+# anything. Queueing for a shared deployment quota was therefore being recorded
+# as the arm's latency, and the arms are not queued equally: the raw_llm arm
+# spends ~20,000 tokens per question against the memory arms' ~650, so it drains
+# the shared bucket and every other arm waits behind it. That produced a 5x
+# latency spread between `neuromorphic` and `neuromorphic_tuned` in the 14 August
+# run -- two arms differing only in one decay constant -- which is not a result
+# about either architecture.
+#
+# A ContextVar rather than a plain counter because arms run concurrently as
+# separate asyncio tasks, and each task gets its own copy of the context. A wait
+# incurred inside one arm's task is therefore charged to that arm and to that
+# question, which a shared module-level counter could not do.
+_throttle_seconds: contextvars.ContextVar[float] = contextvars.ContextVar(
+    "nmafc_throttle_seconds", default=0.0
+)
+
+
+def throttled_seconds() -> float:
+    """Quota wait accumulated by the current task since it started.
+
+    Read once before a timed region and once after; the difference is the part
+    of the elapsed time that was spent queueing rather than working.
+    """
+    return _throttle_seconds.get()
+
+
+def _charge_throttle(seconds: float) -> None:
+    _throttle_seconds.set(_throttle_seconds.get() + seconds)
 
 TPM_LIMIT = int(os.environ.get("NMAFC_BENCH_TPM_LIMIT", "500000"))
 RPM_LIMIT = int(os.environ.get("NMAFC_BENCH_RPM_LIMIT", "500"))
@@ -137,7 +171,14 @@ class RateLimiter:
                 wait = max(0.05, 60.0 - (now - oldest))
                 self.throttle_waits += 1
                 self.throttled_seconds += wait
+            # Charge the wall clock actually slept, not the wait we asked for.
+            # asyncio.sleep overruns under load, and the caller subtracts this
+            # from a measured elapsed time -- so an estimate that ran short
+            # would leave queueing time inside the reported latency, which is
+            # the error this whole mechanism exists to remove.
+            slept_at = time.monotonic()
             await asyncio.sleep(wait)
+            _charge_throttle(time.monotonic() - slept_at)
 
     def stats(self) -> dict:
         return {
@@ -176,7 +217,7 @@ class _Backoff:
                 return False
             delay = min(30.0, 5.0 * 2 ** min(self._net_attempt, 3))
             self._net_attempt += 1
-            await asyncio.sleep(delay + random.uniform(0, 0.5 * delay))
+            await self._sleep(delay + random.uniform(0, 0.5 * delay))
             return True
 
         if self._attempt >= self._max_retries or not is_retryable(exc):
@@ -185,8 +226,22 @@ class _Backoff:
         if delay is None:
             delay = min(60.0, 2.0**self._attempt)
         self._attempt += 1
-        await asyncio.sleep(delay + random.uniform(0, 0.5 * delay + 0.25))
+        await self._sleep(delay + random.uniform(0, 0.5 * delay + 0.25))
         return True
+
+    @staticmethod
+    async def _sleep(seconds: float) -> None:
+        """Sleep, charging the time to this task's quota-wait account.
+
+        Backoff is the same kind of time as a throttle wait: the service was
+        busy or the link was down, and the arm was doing nothing. A 429 that
+        costs 32 seconds of backoff would otherwise appear as a 32-second
+        question, which is what pushed the full_v3 mean to 33.9s against a
+        median of 9.8s -- a tail made of waiting, not of work.
+        """
+        started = time.monotonic()
+        await asyncio.sleep(seconds)
+        _charge_throttle(time.monotonic() - started)
 
     def recovered(self) -> None:
         """Call after a success, so a later outage gets a fresh budget."""

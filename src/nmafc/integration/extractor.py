@@ -8,6 +8,7 @@ from nmafc.schemas.memory import MemoryStateUpdate, UnifiedMemoryPayload
 _SHARED_TAIL = """
 ## Dates:
 Exchanges may be prefixed with a session timestamp, e.g. "[Session — 1:56 pm on 8 May, 2023]". When a fact is time-anchored, state the date explicitly inside `fact_content`, resolving relative references ("yesterday", "last month", "when I was fifteen") against that timestamp. Never invent a date that is not derivable from the timestamp or from the text itself.
+When the speaker dates something relative to now ("last Sunday", "a few days ago", "the weekend before last"), record BOTH the resolved date and its relation to the session timestamp — write "the Sunday before 25 May 2023 (21 May 2023)", not "21 May 2023" alone. Anchor the relation to the session date, not to the speaker's phrasing: "last Sunday" said on 25 May is "the Sunday before 25 May 2023". Resolving the reference and keeping only the result discards a relation the resolved date cannot be turned back into, because nothing in "21 May 2023" says which day it was reckoned from.
 
 ## Override & Naming Rules:
 - Use consistent, category-based entity names describing the topic rather than embedding specific values (e.g. 'blood_pressure_medication', 'user_allergy_latex', 'surgery_schedule', 'current_employment').

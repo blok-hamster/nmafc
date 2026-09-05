@@ -6,6 +6,7 @@ from pathlib import Path
 
 from nmafc.engine.consolidation import MemoryConsolidator
 from nmafc.engine.decay import build_entity_graph, decay_all
+from nmafc.engine.linking import resolve_link_targets
 from nmafc.engine.pruning import apply_suppression, create_suppression_event, detect_override, invalidate_record, prune_cycle
 from nmafc.integration.base import EmbeddingProvider, LLMProvider
 from nmafc.integration.extractor import StateExtractor
@@ -134,6 +135,7 @@ class NeuromorphicMemory:
         self,
         user_msg: str,
         conversation_history: list[dict] | None = None,
+        occurred_at: str | None = None,
     ) -> str:
         """Process a single conversation turn through the full neuromorphic pipeline.
 
@@ -145,9 +147,15 @@ class NeuromorphicMemory:
         6. Prune below-threshold records
         7. Trigger auto-consolidation if interval threshold reached
 
+        `occurred_at` is when this turn happened, in whatever wording should be
+        read back to the model ("15 May 2023"). Recorded before retrieval so
+        that the turn being ingested can already be dated.
+
         Returns the assistant's response text.
         """
         self._current_turn += 1
+        self._record_turn_date(occurred_at)
+        self._record_turn_text(user_msg)
         history = conversation_history or []
 
         retrieved = await self._router.retrieve(
@@ -168,6 +176,7 @@ class NeuromorphicMemory:
         prune_cycle(
             self._hot, self._cold, self._decay_config.w_prune,
             self._current_turn, event_logger=self._event_log,
+            config=self._decay_config,
         )
 
         auto_interval = getattr(self._decay_config, "auto_consolidate_turns", 5)
@@ -178,17 +187,27 @@ class NeuromorphicMemory:
 
         return response_text
 
-    async def ingest_updates(self, updates: list[MemoryStateUpdate]) -> None:
+    async def ingest_updates(
+        self,
+        updates: list[MemoryStateUpdate],
+        occurred_at: str | None = None,
+    ) -> None:
         """Manually ingest memory updates without an LLM call.
 
         Useful for benchmarking and testing.
+
+        `occurred_at` is when this turn happened, in whatever wording the caller
+        wants read back ("15 May 2023"). Supplying it is what lets retrieved
+        facts be dated in the prompt instead of stamped with a turn number.
         """
         self._current_turn += 1
+        self._record_turn_date(occurred_at)
         await self._process_updates(UnifiedMemoryPayload(updates=updates))
         self._run_decay()
         prune_cycle(
             self._hot, self._cold, self._decay_config.w_prune,
             self._current_turn, event_logger=self._event_log,
+            config=self._decay_config,
         )
 
         auto_interval = getattr(self._decay_config, "auto_consolidate_turns", 5)
@@ -202,6 +221,34 @@ class NeuromorphicMemory:
         return self._consolidator.consolidate(
             self._current_turn, event_logger=self._event_log,
         )
+
+    def _record_turn_date(self, occurred_at: str | None) -> None:
+        """Note when the current turn happened, if the caller said.
+
+        Tolerant of archives that predate the table and of Cold ROM backends
+        that do not implement it, since neither is a reason to fail an ingest.
+        The router's cache is dropped so a turn ingested after an earlier
+        retrieval is dated rather than silently falling back to a turn number.
+        """
+        if not occurred_at:
+            return
+        recorder = getattr(self._cold, "record_turn_timestamp", None)
+        if callable(recorder):
+            recorder(self._current_turn, occurred_at)
+            self._router.reset_turn_dates()
+
+    def _record_turn_text(self, text: str) -> None:
+        """Keep the turn's own wording alongside the facts drawn from it.
+
+        Only when hydration is switched on. The text is small next to the store
+        it sits in, but writing it unconditionally would grow every archive to
+        pay for a feature most callers have not enabled.
+        """
+        if not self._decay_config.hydrate_top_k or not text:
+            return
+        recorder = getattr(self._cold, "record_turn_text", None)
+        if callable(recorder):
+            recorder(self._current_turn, text)
 
     async def _process_updates(self, payload: UnifiedMemoryPayload) -> None:
         """Process extracted memory updates: log, suppress overrides, upsert."""
@@ -231,6 +278,17 @@ class NeuromorphicMemory:
                 f"for {len(updates)} facts"
             )
 
+        # Entity names a link is allowed to point at: everything already stored,
+        # plus every fact in this same payload. The batch has to be included
+        # because the extractor is told it may link to another entity in the
+        # same tool call, and those are not in Hot RAM until the loop below
+        # writes them -- resolving against storage alone would reject exactly
+        # the links the prompt asks for.
+        known_entities: list[str] = []
+        if self._decay_config.resolve_link_targets:
+            known_entities = [r.entity_name for r in self._hot.get_all()]
+            known_entities += [u.entity_name for u in updates]
+
         for update, embedding in zip(updates, embeddings):
             # The archive gets the same vector Hot RAM is about to store, which
             # is what lets Cold ROM answer by meaning rather than by shared
@@ -248,6 +306,18 @@ class NeuromorphicMemory:
                     for old_record in overrides
                 ]
                 self._hot.set_invalid_at_many(invalidations)
+                # The archive has to hear about it too. The router queries Cold
+                # ROM on every retrieval, so a fact withdrawn from Hot RAM alone
+                # is pulled straight back by the next keyword or vector hit and
+                # reaches the prompt exactly as before. Measured over 101
+                # belief-update questions, Hot-only invalidation left the stale
+                # value in the prompt 64 times out of 101 -- one more than doing
+                # nothing at all.
+                self._cold.invalidate_facts([
+                    (old_record.entity_name, old_record.fact_content,
+                     self._current_turn)
+                    for old_record in overrides
+                ])
                 for old_record in overrides:
                     self._event_log.log(
                         create_suppression_event(
@@ -257,6 +327,19 @@ class NeuromorphicMemory:
                         )
                     )
 
+            related = list(update.related_entities)
+            if self._decay_config.resolve_link_targets:
+                # Own name excluded before matching, not after: a fact called
+                # "caroline_adoption_goal" is its own closest match by name
+                # overlap, so leaving it in would turn most unresolvable links
+                # into self-references rather than dropping them.
+                related = resolve_link_targets(
+                    related,
+                    (e for e in known_entities
+                     if e.lower() != update.entity_name.lower()),
+                    min_overlap=self._decay_config.link_match_threshold,
+                )
+
             record = MemoryRecord(
                 entity_name=update.entity_name,
                 fact_content=update.fact_content,
@@ -265,13 +348,21 @@ class NeuromorphicMemory:
                 consolidation_index=0,
                 created_at_turn=self._current_turn,
                 last_reinforced_turn=self._current_turn,
-                related_entities=list(update.related_entities),
+                related_entities=related,
                 valid_at=self._current_turn,
+                valid_at_text=(update.valid_at or None),
             )
             self._hot.upsert(record, embedding)
 
     def _run_decay(self) -> None:
         """Apply decay to all mutable records in Hot RAM."""
+        # Deferred reinforcements have to land first. Decay reads the weight
+        # and the consolidation index that the buffer is holding, so decaying
+        # ahead of a flush would compute against stale values and the flush
+        # would then overwrite the result. Free when deferral is off, since
+        # nothing is ever buffered.
+        self._router.flush_reinforcements()
+
         mutable = self._hot.get_all_mutable()
 
         # The graph spans every record, anchors included: anchors do not decay
@@ -363,8 +454,22 @@ class NeuromorphicMemory:
         """All cognitive events for a specific entity."""
         return self._event_log.get_entity_history(entity_name, limit=limit)
 
+    def maintain(self) -> bool:
+        """Settle pending writes and compact the Hot RAM store.
+
+        Meant to be called between conversations, never inside one: compaction
+        costs seconds in exchange for making every later read faster, which only
+        pays back over the reads that follow it. Returns whether the compaction
+        itself ran -- see HotStorage.compact.
+        """
+        self._router.flush_reinforcements()
+        return self._hot.compact()
+
     def close(self) -> None:
         """Close storage resources and connections."""
+        # Anything still buffered is lost once the process ends, so it is
+        # written now rather than silently dropped.
+        self._router.flush_reinforcements()
         self._event_log.close()
         self._cold.close()
 
@@ -453,6 +558,9 @@ class SyncNeuromorphicMemory:
 
     def get_entity_events(self, entity_name: str, limit: int = 50) -> list:
         return self._memory.get_entity_events(entity_name, limit=limit)
+
+    def maintain(self) -> bool:
+        return self._memory.maintain()
 
     def close(self) -> None:
         self._memory.close()

@@ -26,9 +26,26 @@ SCHEMA = pa.schema([
     pa.field("related_entities", pa.list_(pa.string())),
     pa.field("valid_at", pa.int32()),
     pa.field("invalid_at", pa.int32()),
+    pa.field("valid_at_text", pa.string()),
 ])
 
-_TEMPORAL_COLUMNS = {"valid_at", "invalid_at"}
+_TEMPORAL_COLUMNS = {"valid_at", "invalid_at", "valid_at_text"}
+
+
+def _sql_str(value: str) -> str:
+    """Render a Python string as a SQL string literal for a LanceDB filter.
+
+    Entity names come from the extractor, which means they are model-generated
+    English rather than identifiers: "melanie's family camping trip" is a name
+    it produces routinely. Interpolating that between bare single quotes ends
+    the literal at the apostrophe and hands the parser "s family camping trip",
+    which fails the whole query -- and because entity lookup is the graph
+    traversal step, the failure takes the retrieval down with it.
+
+    Doubling the quote is the SQL-standard escape and the only one DataFusion
+    accepts here; there is no parameter binding on this API to use instead.
+    """
+    return "'" + value.replace("'", "''") + "'"
 
 
 class HotStorage:
@@ -64,26 +81,28 @@ class HotStorage:
                 pa.field("related_entities", pa.list_(pa.string())),
                 pa.field("valid_at", pa.int32()),
                 pa.field("invalid_at", pa.int32()),
+                pa.field("valid_at_text", pa.string()),
             ])
             self._db.create_table(TABLE_NAME, schema=schema)
         self._table = self._db.open_table(TABLE_NAME)
         self._migrate_schema()
 
     def _migrate_schema(self) -> None:
-        """Add temporal columns to tables created before they existed."""
+        """Add temporal columns to tables created before they existed.
+
+        Uses LanceDB's own column addition, which alters the table schema and
+        backfills nulls. The obvious-looking alternative -- read every row,
+        delete the table's contents, add the rows back with the new key set --
+        cannot work: `add` validates incoming rows against the schema already on
+        disk, so the extra key is rejected with "Field not found in target
+        schema" and an existing store fails to open at all. The rewrite also
+        capped at whatever limit it read with, and silently dropped anything
+        past it.
+        """
         existing_names = {f.name for f in self._table.schema}
-        missing = _TEMPORAL_COLUMNS - existing_names
-        if not missing:
-            return
-        rows = self._table.search().limit(10000).to_list()
-        if not rows:
-            return
-        for row in rows:
-            row.pop("_distance", None)
-            for col in missing:
-                row.setdefault(col, None)
-        self._table.delete("true")
-        self._table.add(rows)
+        missing = [f for f in SCHEMA if f.name in _TEMPORAL_COLUMNS - existing_names]
+        if missing:
+            self._table.add_columns(missing)
 
     @property
     def _scope_filter(self) -> str:
@@ -110,6 +129,7 @@ class HotStorage:
             "related_entities": list(record.related_entities),
             "valid_at": record.valid_at,
             "invalid_at": record.invalid_at,
+            "valid_at_text": record.valid_at_text,
         }
         self._table.add([row])
 
@@ -147,7 +167,7 @@ class HotStorage:
     def get_by_entity(self, entity_name: str) -> list[MemoryRecord]:
         results = (
             self._table.search()
-            .where(f"{self._scope_filter} AND entity_name = '{entity_name}'")
+            .where(f"{self._scope_filter} AND entity_name = {_sql_str(entity_name)}")
             .limit(100)
             .to_list()
         )
@@ -158,7 +178,7 @@ class HotStorage:
     ) -> list[MemoryRecord]:
         if not entity_names:
             return []
-        quoted = ", ".join(f"'{name}'" for name in set(entity_names))
+        quoted = ", ".join(_sql_str(name) for name in set(entity_names))
         where = f"{self._scope_filter} AND entity_name IN ({quoted})"
         if exclude_invalidated:
             where += " AND invalid_at IS NULL"
@@ -234,13 +254,14 @@ class HotStorage:
         self._table.delete(f"id IN ({quoted})")
 
     def update_reinforcement(self, record_id: str, new_k: int, turn: int) -> None:
+        """One LTP writeback. See apply_reinforcements for the clock guard."""
         results = self._table.search().where(f"id = '{record_id}'").limit(1).to_list()
         if not results:
             return
         row = results[0]
         row["weight"] = 1.0
         row["consolidation_index"] = new_k
-        row["last_reinforced_turn"] = turn
+        row["last_reinforced_turn"] = max(turn, row["last_reinforced_turn"])
         row.pop("_distance", None)
         self.delete(record_id)
         self._table.add([row])
@@ -255,6 +276,15 @@ class HotStorage:
         Retrieval reinforces every record that Spreading Activation surfaces,
         which after two hops is routinely dozens per question, so the per-record
         version made a single answer cost dozens of table rewrites.
+
+        The clock only ever moves forward. A caller that reopens a store without
+        restoring its turn counter starts at 0 and reinforces at turn 1, which
+        without this guard stamps `last_reinforced_turn=1` onto records created
+        at turn 200 -- reinforced, on the record, 199 turns before they existed.
+        Every later decay then measures elapsed time from that floor and reads
+        the whole conversation as having passed since. Found on the full_v3
+        stores, where 3,477 of 3,807 records carry a reinforcement turn earlier
+        than their creation turn.
         """
         if not updates:
             return
@@ -269,7 +299,33 @@ class HotStorage:
             row.pop("_distance", None)
             row["weight"] = 1.0
             row["consolidation_index"] = new_ks[row["id"]]
-            row["last_reinforced_turn"] = turn
+            row["last_reinforced_turn"] = max(turn, row["last_reinforced_turn"])
+
+        self._table.delete(f"id IN ({quoted})")
+        self._table.add(rows)
+
+    def apply_relation_updates(
+        self, updates: list[tuple[str, list[str]]]
+    ) -> None:
+        """Rewrite `related_entities` for many records in a single delete + add.
+
+        Used by the prune cycle to reroute links around a fact it is about to
+        remove, so the graph loses a node rather than a region. Same batched
+        shape as apply_reinforcements: pruning touches every record that pointed
+        at anything doomed, which on a busy conversation is hundreds at once.
+        """
+        if not updates:
+            return
+
+        new_links = dict(updates)  # last write wins
+        quoted = ", ".join(_sql_str(record_id) for record_id in new_links)
+        rows = self._table.search().where(f"id IN ({quoted})").limit(10000).to_list()
+        if not rows:
+            return
+
+        for row in rows:
+            row.pop("_distance", None)
+            row["related_entities"] = list(new_links[row["id"]])
 
         self._table.delete(f"id IN ({quoted})")
         self._table.add(rows)
@@ -288,6 +344,35 @@ class HotStorage:
             row["invalid_at"] = invalidations[row["id"]]
         self._table.delete(f"id IN ({quoted})")
         self._table.add(rows)
+
+    def compact(self) -> bool:
+        """Merge accumulated table versions back into a compact layout.
+
+        Lance is append-only: `delete` tombstones rows and `add` writes a new
+        fragment, so every reinforcement and every decay pass leaves another
+        version behind rather than overwriting in place. Retrieval reinforces
+        on every query, so the count climbs for the life of a conversation --
+        stores from the full_v3 run had accumulated 4,025 versions -- and each
+        later scan has to read across the fragments that produced them.
+
+        Measured on a copy of one such store: traversal fell from 48.2 ms to
+        14.4 ms and vector search from 32.4 ms to 23.3 ms after a single call,
+        which cost 6.4 seconds once. That trade only makes sense between
+        conversations, never inside one, so this is exposed for a caller to
+        schedule rather than being called from the write path.
+
+        Returns False when the installed LanceDB exposes no optimize entry
+        point, so a caller can log the miss instead of failing a long run over
+        a maintenance step that is an optimisation and nothing more.
+        """
+        optimize = getattr(self._table, "optimize", None)
+        if optimize is None:
+            return False
+        try:
+            optimize()
+        except Exception:  # noqa: BLE001 - maintenance must never break a run
+            return False
+        return True
 
     def delete(self, record_id: str) -> None:
         self._table.delete(f"id = '{record_id}'")
@@ -340,5 +425,6 @@ class HotStorage:
             related_entities=rel_list,
             valid_at=row.get("valid_at"),
             invalid_at=row.get("invalid_at"),
+            valid_at_text=row.get("valid_at_text"),
         )
 

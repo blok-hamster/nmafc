@@ -48,7 +48,8 @@ from nmafc.storage.config import NMafcConfig, StorageConfig
 from nmafc.wrapper import NeuromorphicMemory
 
 from ..evaluation.metrics import ArmResponse
-from .base import BenchmarkArm, SHORT_ANSWER_RULES, build_exchanges, strip_answer
+from .base import (BenchmarkArm, SHORT_ANSWER_RULES, build_dated_exchanges,
+                   strip_answer, timer_split, timer_start)
 
 # Retention horizon ~= ln(1/w_prune) / lambda = ln(10) / 0.005 ~= 460 turns.
 LAMBDA_ACTIVE_CONTEXT_TUNED = 0.005
@@ -151,16 +152,16 @@ class NeuromorphicTunedArm(BenchmarkArm):
         yields the same list in the same order, so index N here is the same
         exchange index N was in the run that was interrupted.
         """
-        for index, exchange in enumerate(build_exchanges(turns)):
+        for index, (exchange, occurred_at) in enumerate(build_dated_exchanges(turns)):
             if index < start_at:
                 continue
-            await self._memory.process_turn(user_msg=exchange)
+            await self._memory.process_turn(user_msg=exchange, occurred_at=occurred_at)
             if on_progress is not None:
                 on_progress(index + 1, self._memory.current_turn)
 
     async def answer_question(self, question: str) -> ArmResponse:
         """Answer using neuromorphic retrieval with the lengthened horizon."""
-        start = time.perf_counter()
+        mark = timer_start()
 
         retrieved = await self._memory._router.retrieve(
             question, self._memory.current_turn + 1
@@ -176,7 +177,7 @@ class NeuromorphicTunedArm(BenchmarkArm):
             messages=[{"role": "user", "content": question}],
             system_prompt=system,
         )
-        latency_ms = (time.perf_counter() - start) * 1000
+        latency_ms, throttle_ms = timer_split(mark)
 
         prompt_tokens = (len(system) + len(question)) // 4
         completion_tokens = len(response_text) // 4
@@ -184,6 +185,7 @@ class NeuromorphicTunedArm(BenchmarkArm):
         response = ArmResponse(
             answer=strip_answer(response_text),
             latency_ms=latency_ms,
+            throttle_ms=throttle_ms,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             context_tokens=context_tokens,
@@ -197,6 +199,12 @@ class NeuromorphicTunedArm(BenchmarkArm):
             self.metrics.hot_storage_records = stats.get("count", 0)
             cold = self._memory.get_cold_stats()
             self.metrics.cold_storage_events = cold.get("total_events", 0)
+
+    def compact_storage(self) -> bool:
+        """Settle buffered writebacks and compact the append-only store."""
+        if not self._memory:
+            return False
+        return self._memory.maintain()
 
     def reset(self) -> None:
         """Reinitialize memory from scratch."""

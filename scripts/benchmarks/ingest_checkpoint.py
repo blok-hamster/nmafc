@@ -58,6 +58,23 @@ class IngestState:
     fingerprint: str
 
 
+# Decay-config keys that change what ingestion writes to disk, and therefore
+# belong in the fingerprint. Everything else the runner can override -- top_k,
+# rerank_top_k, max_hops, fallback_keyword_limit, defer_reinforcement_writes --
+# is read only inside `QueryRouter.retrieve`, which ingestion never calls.
+#
+# The distinction is not pedantry. Hashing the whole override dict meant adding
+# any retrieval flag to the CLI silently invalidated every store on disk: a run
+# that merely wanted a different rerank width was made to re-extract 5.3 hours
+# of conversation to reach a byte-identical result. Narrow it here rather than
+# at the call site, so a future retrieval knob is excluded by default and only a
+# genuinely write-affecting one has to be remembered.
+#
+# `beta` is in the set because decay runs on a timer during ingestion, so it
+# changes the weights the store ends up holding.
+INGEST_AFFECTING_KEYS = frozenset({"beta"})
+
+
 def fingerprint(arm_name: str, decay_overrides: dict | None) -> str:
     """Hash every setting that changes what ingestion writes.
 
@@ -67,11 +84,16 @@ def fingerprint(arm_name: str, decay_overrides: dict | None) -> str:
     object the runner holds. Leaving it out would let a `tiered` store be
     resumed into a `permissive` run, which is exactly the class of mistake the
     fingerprint exists to prevent.
+
+    Retrieval-only overrides are filtered out: see INGEST_AFFECTING_KEYS.
     """
+    overrides = decay_overrides or {}
     payload = {
         "version": STATE_VERSION,
         "arm": arm_name,
-        "decay": {k: decay_overrides[k] for k in sorted(decay_overrides or {})},
+        "decay": {
+            k: overrides[k] for k in sorted(overrides) if k in INGEST_AFFECTING_KEYS
+        },
         "extractor_variant": os.environ.get(
             "NMAFC_EXTRACTOR_VARIANT", "tiered"
         ).strip().lower(),

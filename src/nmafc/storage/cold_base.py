@@ -54,6 +54,21 @@ class ColdStorageBase(ABC):
     ) -> list[dict[str, Any]]:
         return []
 
+    # The verbatim evidence layer, on the same terms: a backend that keeps no
+    # turn text returns nothing and hydration silently does not happen, which
+    # is the behaviour every backend had before it existed.
+    def record_turn_text(self, turn: int, text: str) -> None:
+        return None
+
+    def text_for_turns(self, turns: list[int]) -> dict[int, str]:
+        return {}
+
+    # Supersession, on the same terms. A backend that does not record it keeps
+    # the old behaviour: Hot RAM drops the superseded fact and the archive goes
+    # on returning it, so the fact is demoted rather than withdrawn.
+    def invalidate_facts(self, facts: list[tuple[str, str, int]]) -> int:
+        return 0
+
     @abstractmethod
     def count_active(self) -> int: ...
 

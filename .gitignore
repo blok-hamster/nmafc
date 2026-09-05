@@ -48,3 +48,7 @@ logs/
 generate_arch_diagram.py
 DEMO_SCRIPT.md
 NMAFC_Architecture.pdf
+
+# OneDrive sync conflict copies from the 'Bigbrown' machine
+*-Bigbrown.*
+-Bigbrown.gitignore 

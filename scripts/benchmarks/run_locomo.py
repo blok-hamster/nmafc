@@ -191,6 +191,66 @@ def parse_args() -> argparse.Namespace:
             "DecayConfig default."
         ),
     )
+    # Retrieval budget. A retrieval-only ablation over 1,986 questions found
+    # these to be the only settings that move recall at all: rrf_k, max_hops and
+    # weight_signal were flat to four decimal places, while rerank_top_k alone
+    # was worth +0.033 and the three together +0.049. They are exposed
+    # separately because widening intake without widening the output *lowers*
+    # recall (-0.007) -- extra candidates crowd better ones out of a fixed-size
+    # result -- so a reader needs to see which of the three a run actually set.
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=(
+            int(os.environ["NMAFC_BENCH_TOP_K"])
+            if os.environ.get("NMAFC_BENCH_TOP_K")
+            else None
+        ),
+        help=(
+            "Hot RAM vector search depth (env: NMAFC_BENCH_TOP_K). Omit to use "
+            "the DecayConfig default of 10."
+        ),
+    )
+    parser.add_argument(
+        "--rerank-top-k",
+        type=int,
+        default=(
+            int(os.environ["NMAFC_BENCH_RERANK_TOP_K"])
+            if os.environ.get("NMAFC_BENCH_RERANK_TOP_K")
+            else None
+        ),
+        help=(
+            "How many records survive rank fusion into the prompt (env: "
+            "NMAFC_BENCH_RERANK_TOP_K). The dominant retrieval parameter. Omit "
+            "to use the DecayConfig default of 20."
+        ),
+    )
+    parser.add_argument(
+        "--fallback-keyword-limit",
+        type=int,
+        default=(
+            int(os.environ["NMAFC_BENCH_FALLBACK_LIMIT"])
+            if os.environ.get("NMAFC_BENCH_FALLBACK_LIMIT")
+            else None
+        ),
+        help=(
+            "Total Cold ROM contribution budget, semantic plus keyword (env: "
+            "NMAFC_BENCH_FALLBACK_LIMIT). Raising this alone lowers recall; "
+            "raise --rerank-top-k with it. Omit for the default of 20."
+        ),
+    )
+    parser.add_argument(
+        "--defer-reinforcement",
+        action="store_true",
+        default=bool(os.environ.get("NMAFC_BENCH_DEFER_REINFORCEMENT")),
+        help=(
+            "Buffer LTP writebacks and commit them between conversations (env: "
+            "NMAFC_BENCH_DEFER_REINFORCEMENT). Measured at ~650 ms per question "
+            "on a 494-record store, the largest cost the system controls. Safe "
+            "at the default weight_signal of 0, where weight does not enter "
+            "ranking; above 0 a deferred run can rank differently."
+        ),
+    )
     parser.add_argument(
         "--log-file",
         default=os.environ.get("NMAFC_BENCH_LOG_FILE"),
@@ -398,6 +458,14 @@ def build_decay_overrides(args) -> dict:
         overrides["max_hops"] = args.max_hops
     if args.beta is not None:
         overrides["beta"] = args.beta
+    if args.top_k is not None:
+        overrides["top_k"] = args.top_k
+    if args.rerank_top_k is not None:
+        overrides["rerank_top_k"] = args.rerank_top_k
+    if args.fallback_keyword_limit is not None:
+        overrides["fallback_keyword_limit"] = args.fallback_keyword_limit
+    if args.defer_reinforcement:
+        overrides["defer_reinforcement_writes"] = True
     return overrides
 
 
@@ -579,10 +647,25 @@ async def evaluate_arm_on_conversation(
             "f1": compute_f1(response.answer, qa.answer),
             "judge_correct": None,
             "latency_ms": response.latency_ms,
+            # Recorded alongside latency rather than folded into it: this is the
+            # wait for shared deployment quota, which depends on what else was
+            # running at the time and not on the arm being measured.
+            "throttle_ms": response.throttle_ms,
             "context_tokens": response.context_tokens,
         })
 
     arm.update_storage_metrics()
+
+    # Store maintenance, after the questions rather than before: compaction
+    # costs seconds and buys faster reads, so it is worth nothing to the
+    # conversation just finished and everything to the ones that follow, which
+    # share the store. Timed and reported because it is real wall-clock time the
+    # run spends, and unattributed time is how a benchmark starts lying.
+    compact_start = time.perf_counter()
+    if arm.compact_storage():
+        print(f"    [{arm.name}/{conv.sample_id}] store compacted in "
+              f"{time.perf_counter() - compact_start:.1f}s")
+
     return results
 
 
@@ -839,6 +922,10 @@ async def run_benchmark(args: argparse.Namespace) -> None:
             # neighbourhoods, so a run with it on is not comparable to one
             # without. None means the DecayConfig default, which is 0 (off).
             "beta": args.beta,
+            # A latency setting, not an accuracy one, but it belongs here for
+            # the same reason: it changes when reinforcements become visible,
+            # so two runs that differ on it are not strictly the same system.
+            "defer_reinforcement_writes": args.defer_reinforcement,
             "theta": DecayConfig().theta,
             "judge": (args.judge or args.provider) if not args.skip_judge else None,
         },

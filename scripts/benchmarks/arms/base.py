@@ -8,10 +8,37 @@ from the same dataset — they differ only in how they manage memory.
 from __future__ import annotations
 
 import re
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 
 from ..evaluation.metrics import ArmMetrics, ArmResponse
+from ..resilience import throttled_seconds
+
+
+def timer_start() -> tuple[float, float]:
+    """Mark the start of a timed region, capturing the quota-wait baseline."""
+    return time.perf_counter(), throttled_seconds()
+
+
+def timer_split(mark: tuple[float, float]) -> tuple[float, float]:
+    """Split elapsed time since `mark` into (work_ms, throttle_ms).
+
+    Every arm calls a rate-limited provider inside its own stopwatch, so the
+    raw elapsed time contains however long the shared deployment quota made it
+    wait. That wait is not a property of the arm: the raw_llm arm spends ~20,000
+    tokens per question and the memory arms ~650, all drawing on one bucket, so
+    the arm that happens to be running when the bucket drains absorbs the
+    delay. Reporting the two apart is what makes latency comparable at all.
+
+    Clamped at zero because the throttle account is charged from a different
+    clock (`time.monotonic`) than the stopwatch (`time.perf_counter`), and
+    nothing guarantees their rounding agrees to the microsecond.
+    """
+    started, throttle_at_start = mark
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    throttle_ms = (throttled_seconds() - throttle_at_start) * 1000
+    return max(0.0, elapsed_ms - throttle_ms), throttle_ms
 
 
 _PREAMBLE_PATTERNS = re.compile(
@@ -110,6 +137,23 @@ def strip_answer(raw: str) -> str:
 #
 # Applied identically to all arms, so it changes the absolute numbers without
 # advantaging any arm over another.
+#
+# Revised 3 September 2026 after auditing where the F1 actually goes. The
+# earlier version of these rules was written as if the failure were verbosity in
+# general, and it is not: the median answer is already 4 words against a gold
+# median of 3, and stripping trailing hedges off the finished run moved mean F1
+# by +0.001. The loss is concentrated in a 27% tail scoring 0.207 against 0.601
+# for the rest, and 250 of those 418 answers are open-domain questions -- the
+# largest scored category, and the one case these rules said nothing about.
+# Every worked example above covered dates, lists, names or yes/no, so on
+# "why did she..." the model had no format to copy and wrote a sentence.
+#
+# The second half of that tail is vocabulary rather than length. Against gold
+# "personal style and customer comfort" the run answered "chose furniture that
+# reflects her own style while making customers feel cozy" -- a fair paraphrase
+# that shares one scoring token, because "comfort" was restated as "cozy".
+# Token overlap does not reward understanding, it rewards the same words, so the
+# rules now ask for the source wording to be reused rather than improved on.
 SHORT_ANSWER_RULES = """
 
 CRITICAL: You are completing a fill-in-the-blank quiz. Your response is scored by EXACT TOKEN OVERLAP with a 1-5 word reference answer. Every extra word LOWERS your score.
@@ -117,11 +161,14 @@ CRITICAL: You are completing a fill-in-the-blank quiz. Your response is scored b
 Rules:
 - Reply with ONLY the bare answer. No sentences, no explanation, no context.
 - Maximum 5 words unless listing items.
-- For lists: comma-separated nouns only (e.g. "running, pottery, camping").
-- For dates: just the date (e.g. "19 January 2023" or "July 2023").
+- For lists: comma-separated nouns only (e.g. "running, pottery, camping"). Name EVERY item the facts support, not just the best-matching one. A question asking what someone does, has, likes, owns or has taken part in is asking for all of them; answering with one is the single most common error on these.
+- For dates: just the date (e.g. "19 January 2023" or "July 2023"). Give day, month and year whenever the facts support all three — a bare year is scored as a miss. If the facts date something only in relation to another date ("the Sunday before 25 May 2023", "the week before 9 June 2023"), answer in that same relative form rather than converting it.
 - For yes/no: just "Yes" or "No".
 - For names: just the name (e.g. "Sweden" or "Oliver, Luna, Bailey").
 - For "would/could/likely" questions: answer "Yes" or "No" then at most 3 words of reason.
+- For "why", "what does X think/feel", "what motivated X", "how did X" questions: give the reason as a bare phrase, not a sentence. Do not repeat the person's name, do not restate the question, do not add what happened next. "wanted a career change" — not "Gina decided to leave because she wanted a career change."
+- COPY THE WORDING FROM THE FACTS. Reuse the exact nouns and adjectives that appear in the retrieved facts rather than substituting your own. A synonym scores as a miss: if the facts say "delighted", answer "delighted" and not "very happy"; if they say "apartment", answer "apartment" and not "flat".
+- Once you have given the answer, STOP. Never append a caveat about what the facts do or do not confirm, and never dispute a date in the question. If the facts support the answer for a nearby date, give the answer plainly.
 - NEVER start with "Based on", "According to", "The facts show", "Looking at", "I don't have", or any preamble.
 - NEVER say "No information available" — always attempt an answer from the facts, even if uncertain.
 
@@ -131,11 +178,25 @@ Q: What are her pets' names? → Oliver, Luna, Bailey
 Q: What does she do to relax? → running, pottery
 Q: Would she enjoy classical music? → Yes, she likes Bach and Mozart
 Q: What is his job? → software engineer
-Q: Where did she move from? → Sweden"""
+Q: Where did she move from? → Sweden
+Q: Why did he take up the guitar? → wanted a creative outlet
+Q: What did she consider when picking the flat? → the light and the commute
+Q: What motivated her to keep training? → seeing her own progress
+Q: How is the new job going? → busy but rewarding"""
 
 
 def build_exchanges(turns: list[dict]) -> list[str]:
-    """Group a transcript into speaker-labelled exchanges for memory ingestion.
+    """The exchange text alone, for callers that do not carry dates.
+
+    Kept as the exchange list it always was so that resume arithmetic, the
+    checkpoint fingerprint and every diagnostic that replays turn order keep
+    indexing the same way.
+    """
+    return [text for text, _ in build_dated_exchanges(turns)]
+
+
+def build_dated_exchanges(turns: list[dict]) -> list[tuple[str, str | None]]:
+    """Group a transcript into speaker-labelled exchanges, each with its date.
 
     Each user turn is paired with the assistant turn that follows it, and both
     are labelled with their speaker, producing one block per exchange:
@@ -161,8 +222,15 @@ def build_exchanges(turns: list[dict]) -> list[str]:
     Each exchange is prefixed with its session timestamp where the dataset
     provides one, so extracted facts can carry a date. Without it, the temporal
     question category is unanswerable no matter how good the memory is.
+
+    The date is also returned alongside the text, rather than only baked into
+    the header, because the header alone was not enough. It reaches the
+    extractor, but what the store kept was a turn number, so facts came back to
+    the model as "(Valid: turn 220 - present)" and dated questions were
+    unanswerable at the far end instead of the near one. Handing the date to
+    the memory as well lets it be read back as a date.
     """
-    exchanges: list[str] = []
+    exchanges: list[tuple[str, str | None]] = []
     pending: list[str] = []
     pending_date: str | None = None
 
@@ -174,7 +242,7 @@ def build_exchanges(turns: list[dict]) -> list[str]:
         if not pending:
             return
         header = f"[Session — {pending_date}]\n" if pending_date else ""
-        exchanges.append(header + "\n".join(pending))
+        exchanges.append((header + "\n".join(pending), pending_date))
 
     for turn in turns:
         if turn.get("role") == "user":
@@ -261,3 +329,14 @@ class BenchmarkArm(ABC):
     def update_storage_metrics(self) -> None:
         """Update hot/cold storage counts in metrics. Override in subclasses."""
         pass
+
+    def compact_storage(self) -> bool:
+        """Run between-conversation store maintenance. Override in subclasses.
+
+        Called by the runner once a conversation's questions are answered, which
+        is the only safe moment for it: compaction costs seconds up front and
+        repays them across later reads, so it belongs between conversations
+        rather than inside one. Arms with no durable store have nothing to do
+        here and return False.
+        """
+        return False
