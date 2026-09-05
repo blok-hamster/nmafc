@@ -302,11 +302,32 @@ def test_a_store_with_no_turn_text_renders_as_before(
     assert "John drove to the Pacific Northwest" in context
 
 
-def test_hydration_is_off_unless_asked_for(router: QueryRouter, cold: ColdStorage):
+def test_hydration_is_on_by_default(router: QueryRouter, cold: ColdStorage):
+    """The default configuration is the one the published numbers came from.
+
+    `hydrate_top_k` was 0 while the measurement that justifies it (64.4% ->
+    66.1%, p = 0.021) was taken at 5, so the shipped default contradicted the
+    result it was meant to carry.
+    """
     cold.record_turn_text(5, "Melanie: we went camping two weekends ago.")
     context = router.format_context([record(turn=5)])
+    assert "<SOURCE>" in context
+    assert "two weekends ago" in context
+
+
+def test_hydration_can_be_switched_off(tmp_path: Path, cold: ColdStorage):
+    """Zero is the ablation, and it has to reach the prompt as facts alone."""
+    hot = HotStorage(StorageConfig(
+        hot_uri=str(tmp_path / "hot_dry"),
+        cold_uri=str(tmp_path / "cold.db"),
+        embedding_dim=4,
+    ))
+    dry = QueryRouter(hot, cold, embedder=None, config=DecayConfig(hydrate_top_k=0))
+    cold.record_turn_text(5, "Melanie: we went camping two weekends ago.")
+    context = dry.format_context([record(turn=5)])
     assert "<SOURCE>" not in context
     assert "two weekends ago" not in context
+    assert "John drove to the Pacific Northwest" in context
 
 
 # --- the field that carries it --------------------------------------------

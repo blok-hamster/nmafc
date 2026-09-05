@@ -270,10 +270,16 @@ class DecayConfig(BaseModel):
     # reachability rose from 52.7% to 59.4% overall and from 50.5% to 59.8% on
     # temporal questions, where the gold is phrased relatively ("two weekends
     # before 17 July 2023") and the fact carries a date the extractor resolved
-    # on its own. Costs about 384 tokens at five turns, so it is off by default
-    # and the number is the budget.
+    # on its own. The answers followed: 64.4% -> 66.1% over 1,538 questions,
+    # p = 0.021, at a cost of about 384 tokens.
+    #
+    # On by default at five, because five is what was measured and a library
+    # whose default configuration is not the configuration its numbers were
+    # taken from is one that misreports itself. Set to 0 for the ablation.
+    # Stores written before turn_text existed have nothing to hydrate from and
+    # degrade silently to facts alone, which is the old behaviour exactly.
     hydrate_top_k: int = Field(
-        default=0,
+        default=5,
         ge=0,
         description="Attach the source turns behind this many top-ranked facts",
     )

@@ -9,23 +9,48 @@ otherwise.
 
 ## The short version
 
-The framework started 5.9 points behind a plain RAG baseline. It now matches
-RAG while using 28% less context.
+The framework started 5.9 points behind a plain RAG baseline. It now scores
+ahead of it on 22% less context.
 
 | date | run | ours | RAG | our context |
 |---|---|---|---|---|
 | 14 Aug | first full run | 54.35% | 60.26% | 440 tok |
 | 19 Aug | `full_v2` | 59.55% | – | 1,304 tok |
 | 21 Aug | `full_v3` | 63.31% | 64.22% | 656 tok |
-| Sept | + hydration (A/B on `full_v3` stores) | **66.56%** | 66.20% | 1,045 tok |
+| 5 Sept | `full_v3` + hydration + turn dates | **66.95%** | 66.17% | 1,137 tok |
 
-That is **+12.2 points** overall. The interesting part is not the total, it is
-which changes produced it, because the pattern is consistent and it was not the
-pattern we expected.
+That is **+12.6 points** overall. The last row is a full run on the standard
+protocol, not an A/B delta, and against the previous run it is paired on 1,529
+shared questions: **120 fixed, 64 broken, McNemar p = 4.4e-05.**
 
-**Everything that gave the model more or better material helped. Everything that
-tried to take material away hurt.** That holds across five separate experiments
-and it is the main finding of the branch.
+Two warnings about how to read that table, and the second matters more than the
+first.
+
+**Do not claim overall superiority over RAG on 0.78 points.** Cross-run drift is
+1.5 to 2 points, so the honest statement about the overall column is *parity*.
+The +3.64 within our own arm is paired and safe; the overall gap over RAG is
+not.
+
+**The overall column is the least interesting thing here anyway.** The two
+systems do not fail in the same places:
+
+| category | ours | RAG | delta |
+|---|---|---|---|
+| temporal | 65.4% | 49.2% | **+16.2** |
+| multi-hop | 51.0% | 47.9% | +3.1 |
+| single-hop | 48.6% | 46.1% | +2.5 |
+| open-domain | 75.7% | 81.3% | −5.7 |
+
+A 16-point lead on temporal questions is far outside drift, and it is exactly
+the category the design was argued for: questions about *when* something
+happened and what had changed by then. RAG wins open-domain, which is fair,
+because open-domain is "find the passage that says it" and that is what RAG is
+for. So the result is not a tie. It is two systems with different shapes.
+
+The other finding, which held across every experiment on the branch:
+**everything that gave the model more or better material helped, and everything
+that tried to take material away hurt.** Five separate experiments, no
+exceptions.
 
 ---
 
@@ -119,11 +144,12 @@ rose +8.0. So the answer is reaching the prompt far more often than the accuracy
 gain alone suggests, which means there is headroom left in generation rather
 than in retrieval.
 
-**Note for anyone running this:** `hydrate_top_k` defaults to **0**, so
-hydration is off unless you turn it on. It is not enabled in any of the arm
-configs under `scripts/benchmarks/arms/`. The +1.75 above was measured through
-the A/B harness (`_ab_budget.py --hydrate-b 5`). If you want it in a normal run
-you have to set it.
+**`hydrate_top_k` now defaults to 5**, so this is on unless you switch it off.
+It shipped at `0` for a while, which meant the library's default configuration
+was not the configuration its own numbers came from. Set it to `0` for the
+ablation. Stores written before `turn_text` existed have nothing to hydrate from
+and degrade silently to facts alone, which is the old behaviour exactly, so
+turning it on cannot break an old store.
 
 ### 3. Wider retrieval budget (+1.5 points)
 
@@ -155,6 +181,14 @@ not to each thing said in it.
 This one has a placebo control. `_ab_noise.py` runs the same experiment with the
 dates scrambled and came back at **−0.3%**, so the +1.3% is a real effect and
 not the A/B harness flattering itself.
+
+**The table was empty on every store until 5 September.** `turn_timestamps` had
+zero rows across all ten `full_v3` stores, so this improvement existed in the
+code and in an A/B and in no published number. `_backfill_turn_dates.py` filled
+it: 2,957 turns, 100% dated, no LLM calls, because the date of a turn is a
+property of the transcript rather than of anything a model produced. If you are
+working from an older store, run that script before you measure anything
+temporal.
 
 ---
 
@@ -317,7 +351,7 @@ All in `src/nmafc/schemas/memory.py`. Defaults preserve existing behaviour.
 
 | setting | default | what it does |
 |---|---|---|
-| `hydrate_top_k` | `0` | Attach source turns behind this many top-ranked facts. **Set to 5 for the +1.75.** |
+| `hydrate_top_k` | `5` | Attach source turns behind this many top-ranked facts. **Set to 0 for the ablation.** |
 | `resolve_link_targets` | `True` | Match extracted link names to stored entities; drop unmatchable links |
 | `link_match_threshold` | `0.5` | How close a name has to be to count as a match |
 | `rewire_pruned_links` | `False` | Reroute links around pruned records instead of severing them |
@@ -403,17 +437,24 @@ All of them read `NMAFC_BENCH_PROVIDER` and the rest of the configuration from
   is not safe. This is why every result above that matters was measured as a
   paired A/B on the same stores, not by comparing two full runs.
 
-- **82% of facts are classified `CoreAnchor`**, whose base decay rate is 0. So
-  decay barely runs at all in practice, which caps every decay-tuning result on
-  this branch. Fixing the extractor's classification is the prerequisite for any
-  serious work on forgetting.
+- **68.4% of the facts that survive in Hot RAM are classified `CoreAnchor`**,
+  whose base decay rate is 0, so decay barely runs at all in practice. At
+  extraction the share is 35%; the gap is decay doing its job on the other
+  tiers. Sampling says roughly half the anchors are dated one-off episodes
+  ("Melanie took her kids to the museum on 5 July 2023") that should not be
+  anchors at all. This caps every decay-tuning result on the branch. Fixing it
+  will most likely *lower* the LoCoMo score, since every measured result here
+  says removing material from the prompt costs points.
 
 - **The `full_v3` stores carry corrupted `consolidation_index` and
   `last_reinforced_turn`** from before the clock guard. Do not read decay
   history off them. `created_at_turn` and `memory_type` are intact.
 
-- **Hydration is implemented but off by default** and not enabled in the arm
-  configs. See the note in its section.
+- **The 5 September run used `--defer-reinforcement`; the 21 August one did
+  not.** Reinforcement writebacks are buffered rather than committed per query.
+  At `weight_signal = 0`, which is the default and what both runs used, weight
+  does not enter ranking, so the two are equivalent for retrieval. It changes
+  what the stores look like afterwards, not what the model saw.
 
 - The belief-update questions were mined from LoCoMo, which was not built to
   test belief updates. LongMemEval is the right dataset for that and has not
@@ -425,10 +466,17 @@ All of them read `NMAFC_BENCH_PROVIDER` and the rest of the configuration from
 
 Ranked by expected value, given everything above.
 
-1. **Turn hydration on in the arm configs.** It is measured, it is significant,
-   and it is currently costing 1.75 points for no reason.
+~~1. **Turn hydration on in the arm configs.**~~ Done, 5 September. It was the
+whole of the 63.31% -> 66.95% jump, together with the dates backfill.
+
+1. **Close the open-domain gap.** RAG leads by 5.7 points there and that is the
+   only category it still wins. Those questions want the passage, not the fact,
+   which is exactly what hydration supplies, so raising `hydrate_top_k` above 5
+   is the cheap thing to try first.
 2. **Fix `CoreAnchor` over-classification in the extractor.** Nothing about
-   forgetting can be evaluated properly until decay actually runs.
+   forgetting can be evaluated properly until decay actually runs. Needs full
+   re-ingestion (~5.3h) because `memory_type` is set at write time, so batch it
+   with every other write-time change. Expect the LoCoMo number to go *down*.
 3. **LongMemEval.** LoCoMo rewards retrieval breadth, which is why breadth is
    what wins here. A dataset built around belief updates would test the parts of
    this design that LoCoMo cannot.
@@ -442,7 +490,7 @@ Ranked by expected value, given everything above.
 
 ```bash
 python -m pytest tests/unit -q
-# 360 passed, 3 skipped
+# 361 passed, 3 skipped
 ```
 
 New: `test_link_resolution.py`, `test_link_rewiring.py`, `test_turn_dates.py`.
