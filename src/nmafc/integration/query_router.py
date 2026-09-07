@@ -97,7 +97,7 @@ class QueryRouter:
                 rank_in_source=rank, hop_distance=0,
             ))
 
-        # --- Step 3: BFS expansion in Hot RAM ---
+        # --- Step 3: BFS expansion in Hot RAM (forward + reverse) ---
         current_hop = 0
         max_hops = self._config.max_hops
 
@@ -107,10 +107,15 @@ class QueryRouter:
             if not unvisited:
                 break
 
+            # Forward: records whose entity_name is in the frontier
             neighbors = self._hot.get_by_entities(unvisited, exclude_invalidated=exclude_inv)
+            # Reverse: records whose related_entities point to the frontier
+            reverse = self._hot.get_records_pointing_to(unvisited, exclude_invalidated=exclude_inv)
+            all_hop_records = {r.id: r for r in neighbors + reverse}
+
             frontier_entities = set()
 
-            for rec in neighbors:
+            for rec in all_hop_records.values():
                 if rec.id not in visited_ids:
                     visited_ids.add(rec.id)
                     visited_entities.add(rec.entity_name.lower())
@@ -273,19 +278,60 @@ class QueryRouter:
         return found
 
     def format_context(self, records: list[MemoryRecord]) -> str:
-        """Format retrieved memories using Zep-style structured fact presentation.
+        """Format retrieved memories with entity grouping and connection hints.
 
-        Facts are presented as discrete items with temporal validity ranges.
-        This gives the LLM scannable, atomic facts rather than a narrative list.
+        Groups facts by entity, then explicitly highlights cross-entity
+        relationships to help the LLM connect dots across multiple hops.
         """
         if not records:
             return ""
 
-        lines = ["<FACTS>"]
+        # Group facts by entity
+        by_entity: dict[str, list[MemoryRecord]] = {}
         for r in records:
-            valid_from = f"turn {r.valid_at}" if r.valid_at else f"turn {r.created_at_turn}"
-            valid_to = f"turn {r.invalid_at}" if r.invalid_at else "present"
-            lines.append(f"{r.fact_content} (Valid: {valid_from} - {valid_to})")
-        lines.append("</FACTS>")
+            key = r.entity_name.lower()
+            by_entity.setdefault(key, []).append(r)
 
+        # Build an index of which entities are mentioned in which facts
+        entity_mentions: dict[str, set[str]] = {}
+        for r in records:
+            for rel in r.related_entities:
+                entity_mentions.setdefault(rel.lower(), set()).add(r.entity_name.lower())
+
+        lines = ["<FACTS>"]
+
+        # Grouped facts by entity
+        for entity_name, recs in sorted(by_entity.items()):
+            lines.append(f"[{entity_name}]")
+            for r in recs:
+                if r.valid_at_date:
+                    valid_from = r.valid_at_date
+                else:
+                    valid_from = f"turn {r.valid_at}" if r.valid_at else f"turn {r.created_at_turn}"
+                valid_to = f"turn {r.invalid_at}" if r.invalid_at else "present"
+                lines.append(f"  {r.fact_content} (Valid: {valid_from} - {valid_to})")
+
+        # Highlight cross-entity connections (multi-hop bridge)
+        connections: list[str] = []
+        seen_conns: set[tuple[str, str]] = set()
+        for entity_a, mentions in entity_mentions.items():
+            for entity_b in mentions:
+                if entity_a == entity_b:
+                    continue
+                pair = tuple(sorted([entity_a, entity_b]))
+                if pair in seen_conns:
+                    continue
+                seen_conns.add(pair)
+                # Only show connections where both entities have facts
+                if entity_a in by_entity and entity_b in by_entity:
+                    connections.append(
+                        f"  {entity_a} <-> {entity_b} (connected via shared references)"
+                    )
+
+        if connections:
+            lines.append("")
+            lines.append("[CONNECTIONS]")
+            lines.extend(connections)
+
+        lines.append("</FACTS>")
         return "\n".join(lines)

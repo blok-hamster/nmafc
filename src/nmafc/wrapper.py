@@ -4,6 +4,8 @@ import asyncio
 import os
 from pathlib import Path
 
+import re
+
 from nmafc.engine.consolidation import MemoryConsolidator
 from nmafc.engine.decay import build_entity_graph, decay_all
 from nmafc.engine.pruning import apply_suppression, create_suppression_event, detect_override, invalidate_record, prune_cycle
@@ -20,6 +22,20 @@ from nmafc.storage.hot import HotStorage
 # Seconds to wait on the embedding-dimension probe before falling back to the
 # configured dimension. Bounded because the probe can block indefinitely.
 EMBED_PROBE_TIMEOUT = float(os.environ.get("NMAFC_EMBED_PROBE_TIMEOUT", "30"))
+
+
+def sanitize_entity_name(name: str) -> str:
+    """Normalize an entity name for safe storage and consistent graph lookups.
+
+    Lowercases, strips whitespace, replaces apostrophes and special chars
+    with underscores, and collapses runs of underscores. Prevents SQL injection
+    via entity names containing quotes (e.g. "caroline's friendship").
+    """
+    name = name.strip().lower()
+    name = name.replace("'", "_").replace('"', "_")
+    name = re.sub(r"[^a-z0-9_]+", "_", name)
+    name = re.sub(r"_+", "_", name).strip("_")
+    return name
 
 
 class NeuromorphicMemory:
@@ -232,6 +248,11 @@ class NeuromorphicMemory:
             )
 
         for update, embedding in zip(updates, embeddings):
+            update.entity_name = sanitize_entity_name(update.entity_name)
+            if update.overrides_entity:
+                update.overrides_entity = sanitize_entity_name(update.overrides_entity)
+            update.related_entities = [sanitize_entity_name(r) for r in update.related_entities]
+
             # The archive gets the same vector Hot RAM is about to store, which
             # is what lets Cold ROM answer by meaning rather than by shared
             # words. It is free: the embedding has already been paid for above.
@@ -267,6 +288,7 @@ class NeuromorphicMemory:
                 last_reinforced_turn=self._current_turn,
                 related_entities=list(update.related_entities),
                 valid_at=self._current_turn,
+                valid_at_date=update.valid_at,
             )
             self._hot.upsert(record, embedding)
 

@@ -70,6 +70,10 @@ class MemoryRecord(BaseModel):
         default=None,
         description="Turn when the fact became true. Falls back to created_at_turn if None.",
     )
+    valid_at_date: Optional[str] = Field(
+        default=None,
+        description="Original date string from LLM extraction (e.g. '2023-05-08', 'last week'). Displayed to the answering LLM.",
+    )
     invalid_at: Optional[int] = Field(
         default=None,
         description="Turn when the fact was superseded. None means still valid.",
@@ -174,6 +178,10 @@ class DecayConfig(BaseModel):
     rerank_top_k: int = Field(default=20, gt=0, description="Max records surviving reranking into prompt")
     recency_boost: float = Field(default=0.0, ge=0.0, description="Additive RRF boost for recent records")
     weight_signal: float = Field(default=0.0, ge=0.0, description="Additive RRF boost proportional to record weight")
+    hop_penalty: float = Field(
+        default=0.2, ge=0.0, le=1.0,
+        description="Multiplicative decay per BFS hop in RRF scoring. 0 = no penalty, 0.2 = 20% reduction per hop.",
+    )
     exclude_invalidated: bool = Field(
         default=True,
         description="Exclude records with invalid_at set from normal search. When False, they are deprioritized by reranker instead.",

@@ -25,10 +25,11 @@ SCHEMA = pa.schema([
     pa.field("last_reinforced_turn", pa.int32()),
     pa.field("related_entities", pa.list_(pa.string())),
     pa.field("valid_at", pa.int32()),
+    pa.field("valid_at_date", pa.string()),
     pa.field("invalid_at", pa.int32()),
 ])
 
-_TEMPORAL_COLUMNS = {"valid_at", "invalid_at"}
+_TEMPORAL_COLUMNS = {"valid_at", "valid_at_date", "invalid_at"}
 
 
 class HotStorage:
@@ -63,6 +64,7 @@ class HotStorage:
                 pa.field("last_reinforced_turn", pa.int32()),
                 pa.field("related_entities", pa.list_(pa.string())),
                 pa.field("valid_at", pa.int32()),
+                pa.field("valid_at_date", pa.string()),
                 pa.field("invalid_at", pa.int32()),
             ])
             self._db.create_table(TABLE_NAME, schema=schema)
@@ -109,6 +111,7 @@ class HotStorage:
             "last_reinforced_turn": record.last_reinforced_turn,
             "related_entities": list(record.related_entities),
             "valid_at": record.valid_at,
+            "valid_at_date": record.valid_at_date,
             "invalid_at": record.invalid_at,
         }
         self._table.add([row])
@@ -145,9 +148,10 @@ class HotStorage:
         return search_results
 
     def get_by_entity(self, entity_name: str) -> list[MemoryRecord]:
+        safe = entity_name.replace("'", "''")
         results = (
             self._table.search()
-            .where(f"{self._scope_filter} AND entity_name = '{entity_name}'")
+            .where(f"{self._scope_filter} AND entity_name = '{safe}'")
             .limit(100)
             .to_list()
         )
@@ -158,7 +162,7 @@ class HotStorage:
     ) -> list[MemoryRecord]:
         if not entity_names:
             return []
-        quoted = ", ".join(f"'{name}'" for name in set(entity_names))
+        quoted = ", ".join(f"'{name.replace(chr(39), chr(39)*2)}'" for name in set(entity_names))
         where = f"{self._scope_filter} AND entity_name IN ({quoted})"
         if exclude_invalidated:
             where += " AND invalid_at IS NULL"
@@ -305,6 +309,32 @@ class HotStorage:
         results = self._table.search().where(self._scope_filter).limit(10000).to_list()
         return [self._row_to_record(r) for r in results]
 
+    def get_records_pointing_to(
+        self, entity_names: list[str], exclude_invalidated: bool = True
+    ) -> list[MemoryRecord]:
+        """Find records whose related_entities contain any of the given names.
+
+        This is the reverse graph lookup: given a set of seed entities, find
+        all records that link TO those entities. Combined with forward BFS,
+        this gives bidirectional graph traversal.
+        """
+        if not entity_names:
+            return []
+        all_records = self.get_all()
+        targets = {e.lower() for e in entity_names}
+        result = []
+        seen_ids: set[str] = set()
+        for rec in all_records:
+            if exclude_invalidated and rec.invalid_at is not None:
+                continue
+            if rec.id in seen_ids:
+                continue
+            rec_rels = {r.lower() for r in rec.related_entities}
+            if rec_rels & targets:
+                seen_ids.add(rec.id)
+                result.append(rec)
+        return result
+
     def count(self) -> int:
         results = self._table.search().where(self._scope_filter).to_list()
         return len(results)
@@ -339,6 +369,7 @@ class HotStorage:
             last_reinforced_turn=row["last_reinforced_turn"],
             related_entities=rel_list,
             valid_at=row.get("valid_at"),
+            valid_at_date=row.get("valid_at_date"),
             invalid_at=row.get("invalid_at"),
         )
 
