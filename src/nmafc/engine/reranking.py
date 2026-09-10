@@ -19,6 +19,8 @@ def reciprocal_rank_fusion(
     current_turn: int = 0,
     recency_boost: float = 0.0,
     weight_signal: float = 0.0,
+    grounding: dict[str, float] | None = None,
+    grounding_weight: float = 0.0,
 ) -> list[MemoryRecord]:
     """Compute RRF scores across all source lists, return top_k records.
 
@@ -30,6 +32,8 @@ def reciprocal_rank_fusion(
     Optional additive modifiers applied after fusion:
     - recency_boost: score += recency_boost * (1 - age/max_age)
     - weight_signal: score += weight_signal * record.weight
+    - grounding: score += grounding_weight * grounding[entity], where the map
+      holds how well each entity's source turn matches the question, 0 to 1
     """
     # Assign ranks (1-indexed) within each source list
     for source, items in candidate_lists.items():
@@ -74,6 +78,19 @@ def reciprocal_rank_fusion(
         for entity_key, rec in entity_records.items():
             entity_scores[entity_key] += weight_signal * rec.weight
 
+    # Deliberately additive rather than a sixth list. Every list here carries
+    # the same weight, so a list would make "the question's words appear in the
+    # turn this fact came from" worth as much as topping vector search. What the
+    # signal is for is separating facts the other signals rank identically, and
+    # that is a tie-break: adjacent ranks within one list differ by about
+    # 0.0003, so a weight of that order moves a fact past its near-copy and
+    # leaves everything that won on merit where it was.
+    if grounding_weight > 0 and grounding:
+        for entity_key in entity_scores:
+            share = grounding.get(entity_key)
+            if share:
+                entity_scores[entity_key] += grounding_weight * share
+
     # Sort by RRF score descending, take top_k
     ranked = sorted(entity_scores.keys(), key=lambda e: -entity_scores[e])
     return [entity_records[e] for e in ranked[:top_k]]
@@ -83,6 +100,7 @@ def rerank(
     candidates: list[SearchCandidate],
     config: DecayConfig,
     current_turn: int = 0,
+    grounding: dict[str, float] | None = None,
 ) -> list[MemoryRecord]:
     """Main entry point: group candidates by source, apply RRF, return top_k."""
     if not candidates:
@@ -100,4 +118,6 @@ def rerank(
         current_turn=current_turn,
         recency_boost=config.recency_boost,
         weight_signal=config.weight_signal,
+        grounding=grounding,
+        grounding_weight=config.source_grounding,
     )

@@ -161,7 +161,11 @@ class NeuromorphicMemory:
         retrieved = await self._router.retrieve(
             user_msg, self._current_turn, event_logger=self._event_log
         )
-        memory_context = self._router.format_context(retrieved)
+        # `user_msg`, not just the records. With `hydrate_lines` set, the
+        # source block keeps the N lines of each turn that best match the cue,
+        # and without the cue that choice is made from the retrieved facts
+        # alone -- which is to say, blind to what was actually asked.
+        memory_context = self._router.format_context(retrieved, user_msg)
 
         response_text, payload = await self._extractor.extract(
             user_msg=user_msg,

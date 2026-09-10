@@ -166,7 +166,7 @@ class NeuromorphicTunedArm(BenchmarkArm):
         retrieved = await self._memory._router.retrieve(
             question, self._memory.current_turn + 1
         )
-        memory_context = self._memory._router.format_context(retrieved)
+        memory_context = self._memory._router.format_context(retrieved, question)
         context_tokens = len(memory_context) // 4
 
         system = ANSWER_SYSTEM_PROMPT

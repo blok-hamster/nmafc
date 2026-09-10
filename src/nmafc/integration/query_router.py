@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 
 from nmafc.engine.reinforcement import reinforce
 from nmafc.integration.base import EmbeddingProvider
+from nmafc.integration.grounding import source_scores
+from nmafc.integration.quantities import disagrees, quantity_cues
 from nmafc.schemas.memory import DecayConfig, MemoryRecord, MemoryType, SearchCandidate
 from nmafc.storage.cold_base import ColdStorageBase
 from nmafc.storage.hot import HotStorage
@@ -15,6 +17,121 @@ if TYPE_CHECKING:
 
 # Leading clock time on a session timestamp: "7:18 pm on 27 May, 2023".
 CLOCK_PREFIX = re.compile(r"^\d{1,2}:\d{2}\s*[ap]\.?m\.?\s+on\s+", re.I)
+
+WORD = re.compile(r"[a-z0-9']+")
+# Deliberately small. A long stop list starts deciding which content words
+# matter, and the cue here is already narrow -- one question and the handful of
+# facts drawn from one turn -- so the words worth dropping are only the ones
+# that appear in every question ever asked.
+STOPWORDS = frozenset(
+    "a an and are as at be been but by can did do does for from had has have "
+    "he her him his how i if in into is it its me my not of on or our she that "
+    "the their them then there they this to was we were what when where which "
+    "who why will with would you your".split()
+)
+
+
+def cue_words(text: str) -> set[str]:
+    return {w for w in WORD.findall(text.lower())
+            if len(w) > 2 and w not in STOPWORDS}
+
+
+def separate_facts(records: list[MemoryRecord],
+                   threshold: float) -> list[MemoryRecord]:
+    """Ranked facts with the restatements of earlier ones removed.
+
+    Pattern separation over the rendered list. Two facts are treated as the same
+    fact when the content words of one are `threshold` contained in the other's
+    -- containment, not Jaccard, because the redundant case is a short summary
+    wholly restated inside a longer one, and Jaccard scores that pair as barely
+    similar on the strength of the extra words alone.
+
+    Which of the pair survives is decided by specificity, not by rank. The more
+    specific fact says everything the vaguer one says and more, so keeping the
+    vaguer one because it happened to rank higher would discard information to
+    preserve an ordering. The survivor inherits the better of the two positions,
+    so ranking order is otherwise untouched and nothing is promoted past a fact
+    it lost to.
+
+    Facts with no content words at all -- an extraction that produced only
+    stopwords -- are kept and compared against nothing, because a zero-length cue
+    is contained in everything and would otherwise delete the whole list.
+
+    Quantities are checked separately and can veto a merge, because the content
+    words cannot see them. `cue_words` keeps tokens longer than two characters,
+    so "He paid 42 dollars" and "He paid 47 dollars" both reduce to
+    `{paid, dollars}`: containment is 1.0, and without the veto one of the two
+    amounts is deleted as a restatement of the other, with the survivor decided
+    by which happened to rank higher. Two facts that state different numbers are
+    two facts.
+    """
+    kept: list[MemoryRecord] = []
+    cues: list[set[str]] = []
+    for record in records:
+        cue = cue_words(record.fact_content)
+        if not cue:
+            kept.append(record)
+            cues.append(cue)
+            continue
+        for i, other in enumerate(cues):
+            if not other:
+                continue
+            shared = len(cue & other)
+            if shared / min(len(cue), len(other)) < threshold:
+                continue
+            if disagrees(record.fact_content, kept[i].fact_content):
+                continue
+            # Same fact. Keep whichever carries more, at the earlier position.
+            if len(cue) > len(other):
+                kept[i] = record
+                cues[i] = cue
+            break
+        else:
+            kept.append(record)
+            cues.append(cue)
+    return kept
+
+
+def split_turn(text: str) -> tuple[str | None, list[str]]:
+    """A turn as its session header and its speaker lines.
+
+    The header is the bracketed timestamp the ingester writes above every turn.
+    A turn with no header is all body, which is what a store written by an older
+    ingester looks like.
+    """
+    lines = [line for line in text.split("\n") if line.strip()]
+    if lines and lines[0].lstrip().startswith("["):
+        return lines[0], lines[1:]
+    return None, lines
+
+
+def best_lines(body: list[str], cue: set[str], keep: int,
+               quantities: set[str] | None = None) -> list[str]:
+    """The `keep` lines that share the most cue words, in the order they were said.
+
+    Ties go to the earlier line. That is not arbitrary: in this transcript the
+    first line of a turn is the one that raises the subject and the second is
+    usually a reaction to it, so when neither matches the cue better, the one
+    that introduced the topic is the more likely to carry the answer.
+
+    A shared quantity outranks any number of shared words. A number is the most
+    specific thing a line can share with the question -- several lines of a turn
+    will talk about rent, but one of them says what the rent was -- and the word
+    cue cannot see it, because `cue_words` drops anything two characters or
+    shorter and so loses every number below 100. Passing no quantities restores
+    the word-only ordering exactly.
+    """
+    if len(body) <= keep:
+        return body
+    numbers = quantities or set()
+
+    def rank(i: int) -> tuple[int, int, int]:
+        line = body[i]
+        shared = len(numbers & quantity_cues(line)) if numbers else 0
+        return (-shared, -len(cue & cue_words(line)), i)
+
+    order = sorted(range(len(body)), key=rank)
+    return [body[i] for i in sorted(order[:keep])]
 
 
 class QueryRouter:
@@ -47,6 +164,9 @@ class QueryRouter:
         # to rediscover that, and refreshed by reset_turn_dates() when ingestion
         # adds turns after the router has already answered something.
         self._turn_dates: dict[int, str] | None = None
+        # question -> the vector `retrieve` embedded it to, so the rendering
+        # pass can rank turns by meaning without paying for the embedding twice.
+        self._query_vectors: dict[str, list[float]] = {}
 
     def reset_turn_dates(self) -> None:
         """Forget the cached turn dates, so newly ingested turns are picked up."""
@@ -119,6 +239,17 @@ class QueryRouter:
         from nmafc.engine.reranking import rerank
 
         query_embedding = await self._embedder.embed_single(query)
+        # Kept so `format_context` can rank turns by meaning. That runs later,
+        # synchronously, and from a different caller, so it cannot embed the
+        # question itself and re-embedding here would be a second paid call for
+        # a vector we are already holding. Keyed by the question, so a lookup
+        # either finds the vector for that exact question or finds nothing and
+        # the ranking falls back to words; there is no key under which it can
+        # return the wrong vector. Bounded because a long session must not
+        # accumulate one vector per question ever asked.
+        self._query_vectors[query] = query_embedding
+        while len(self._query_vectors) > 8:
+            self._query_vectors.pop(next(iter(self._query_vectors)))
         exclude_inv = self._config.exclude_invalidated
 
         # --- Step 1: Parallel search across both tiers ---
@@ -200,8 +331,13 @@ class QueryRouter:
                     rank_in_source=rank, hop_distance=1,
                 ))
 
+        # --- Step 4b: Score the evidence, not just the summaries ---
+        grounding = (self._grounded(query, candidates)
+                     if self._config.source_grounding else None)
+
         # --- Step 5: Rerank all candidates ---
-        final_records = rerank(candidates, self._config, current_turn)
+        final_records = rerank(candidates, self._config, current_turn,
+                               grounding=grounding)
 
         # --- Step 6: LTP reinforcement (Hot-sourced records only) ---
         hot_ids = visited_ids
@@ -370,7 +506,8 @@ class QueryRouter:
                 found.append(self._cold_row_to_record(row))
         return found
 
-    def format_context(self, records: list[MemoryRecord]) -> str:
+    def format_context(self, records: list[MemoryRecord],
+                       query: str | None = None) -> str:
         """Format retrieved memories using Zep-style structured fact presentation.
 
         Facts are presented as discrete items with temporal validity ranges.
@@ -392,8 +529,22 @@ class QueryRouter:
         if not records:
             return ""
 
-        lines = ["<FACTS>"]
-        for r in records:
+        # The facts written into the prompt can be fewer than the facts
+        # retrieved. `_source_turns` below still reads the full list, so
+        # trimming here buys source depth instead of restating it. See
+        # `context_facts_top_k`.
+        #
+        # Separation runs before the trim, which is the whole point of it. Run
+        # afterwards it would only shorten a list of six near-copies to three;
+        # run first, the six slots are filled with six facts that differ.
+        distinct = records
+        if self._config.fact_overlap_max is not None:
+            distinct = separate_facts(records, self._config.fact_overlap_max)
+        limit = self._config.context_facts_top_k
+        shown = distinct if limit is None else distinct[:limit]
+
+        lines = ["<FACTS>"] if shown else []
+        for r in shown:
             valid_from = (
                 r.valid_at_text
                 or self._date_for(r.valid_at or r.created_at_turn)
@@ -426,18 +577,282 @@ class QueryRouter:
                 lines.append(
                     f"{r.fact_content} (Valid: {valid_from} - {valid_to or 'present'})"
                 )
-        lines.append("</FACTS>")
+        if shown:
+            lines.append("</FACTS>")
 
-        hydrated = self._source_turns(records)
+        hydrated = self._source_turns(records, query)
         if hydrated:
-            lines.append("")
+            if lines:
+                lines.append("")
             lines.append("<SOURCE>")
             lines.extend(hydrated)
             lines.append("</SOURCE>")
 
         return "\n".join(lines)
 
-    def _source_turns(self, records: list[MemoryRecord]) -> list[str]:
+    def _grounded(self, query: str,
+                  candidates: list[SearchCandidate]) -> dict[str, float]:
+        """How well each candidate's source turn answers the question, 0 to 1.
+
+        Everything before this ranks the fact, which is a summary written at
+        ingestion by a model that could not know what would later be asked. When
+        a question turns on a word the summary dropped, no amount of reranking
+        recovers it, because the word is not in anything being ranked.
+
+        Keyed by entity name because that is what the fusion scores, and scaled
+        so the best-matching turn scores 1.0. Scaling rather than using the raw
+        BM25 total keeps the boost inside a known range whatever the question's
+        length, which is what makes a single configured weight mean the same
+        thing on every query.
+
+        No turn is ever added as a candidate. A turn is read only because a fact
+        from it already won a slot, so the retrieval budget is spent on exactly
+        what it was spent on before; only the order changes.
+        """
+        reader = getattr(self._cold, "text_for_turns", None)
+        if reader is None:
+            return {}
+        by_turn: dict[int, list[SearchCandidate]] = {}
+        for c in candidates:
+            if c.record.created_at_turn:
+                by_turn.setdefault(c.record.created_at_turn, []).append(c)
+        if len(by_turn) < 2:
+            # Nothing to separate, and scoring one turn against itself would
+            # hand a full boost to whatever happened to be the only entrant.
+            return {}
+
+        texts = reader(sorted(by_turn))
+        scores = source_scores(query, {t: texts.get(t, "") for t in by_turn})
+        top = max(scores.values(), default=0.0)
+        if top <= 0.0:
+            return {}
+
+        out: dict[str, float] = {}
+        for turn, group in by_turn.items():
+            share = scores.get(turn, 0.0) / top
+            if share <= 0.0:
+                continue
+            for c in group:
+                # An entity can hold facts from several turns. The best of them
+                # wins, because the boost answers "is this entity evidenced by
+                # a turn that matches the question", and one turn that does is
+                # enough.
+                key = c.record.entity_name.lower()
+                out[key] = max(out.get(key, 0.0), share)
+        return out
+
+    def _scan_span(self, records: list[MemoryRecord]) -> tuple[int, int] | None:
+        """The turn range the answer is likely to be in, or None for no bound.
+
+        Retrieval has already decided roughly where in the store this question
+        belongs; the turns behind its best facts are that decision expressed as
+        a number. Bounding the turn scan to that range is what stops a stranger's
+        dialogue from winning a hydration slot on a shared rare word.
+
+        Only the top `scan_span_facts` are used. The tail of the retrieved list
+        is exactly where off-subject facts sit, so a span drawn from all of them
+        is nearly the whole store and bounds nothing.
+        """
+        k = self._config.scan_span_facts
+        if k <= 0:
+            return None
+        turns = [r.created_at_turn for r in records if r.created_at_turn][:k]
+        if not turns:
+            return None
+        margin = self._config.scan_span_margin
+        return min(turns) - margin, max(turns) + margin
+
+    def _scanned_turns(self, query: str, have: list[int], scan: int,
+                       span: tuple[int, int] | None = None) -> list[int]:
+        """The best-matching turns of the whole conversation that retrieval missed.
+
+        Everything else in this file ranks facts, and hydration then reads the
+        turns behind the facts that won. That leaves one thing unreachable: a
+        turn whose facts all ranked below the cut. No amount of `hydrate_pool`
+        recovers it, because the pool is drawn from the retrieved list and
+        nothing in the retrieved list points at it.
+
+        The evidence for building this is the shape of what open-domain still
+        gets wrong. Of 55 remaining losses, 36 have no content word of the gold
+        anywhere in the rendered context, and reading them the missing word is
+        usually one concrete noun the extractor generalised away: the gold is
+        "Hoodies" and we answer "clothing", the gold is "tree pose" and we
+        answer "Dancer Pose". The noun is in the turn. It is not in any fact,
+        so it cannot be retrieved, so the turn is never nominated.
+
+        **This does not put turns into the retrieval budget**, which is the
+        objection the store's own schema comment raises against indexing turn
+        text, and it is a fair objection. Turns returned here are candidates for
+        hydration only, a budget of `hydrate_top_k` that is already being spent;
+        the caller still takes exactly the number of turns it would have taken,
+        and no fact loses a slot. The cost is a BM25 pass over a few hundred
+        short strings, which is why it is capped: a question that matches
+        nothing gets nothing, and `scan` bounds how many of the ones it does
+        match are even allowed to compete.
+
+        Scored against the whole conversation rather than against the pool, so
+        document frequency is computed over every turn there is. That is the
+        better estimate of a term's rarity and it is what makes "Hoodies"
+        outrank a turn that merely repeats the question's common words.
+
+        `span` bounds which turns may be *taken*, and deliberately not which are
+        scored. Rarity is a property of the store, so narrowing the corpus would
+        make a word common in one conversation look rare, which is the opposite
+        of the discrimination this exists for.
+        """
+        if scan <= 0:
+            return []
+        reader = getattr(self._cold, "all_turn_text", None)
+        if reader is None:
+            return []
+        texts = reader()
+        if not texts:
+            return []
+        seen = set(have)
+        scores = source_scores(query, texts)
+        lo, hi = span if span else (None, None)
+        eligible = [t for t in texts
+                    if t not in seen and (lo is None or lo <= t <= hi)]
+        ranked = sorted(eligible, key=lambda t: (-scores.get(t, 0.0), t))
+        sims: dict[int, float] = {}
+        qv = self._query_vectors.get(query)
+        if qv is not None and self._config.scan_semantic > 0:
+            ranked, sims = self._fuse_semantic(qv, eligible, ranked)
+        # A turn no ranker has an opinion about is not a preference. Taking it
+        # would spend a hydration slot on an arbitrary turn, which is strictly
+        # worse than leaving the slot with the fact that earned it.
+        #
+        # With meaning in play the test cannot stay "shares a word", because the
+        # turns this exists to reach are the ones that share no word: the turn
+        # answering how John feels while surfing says "super exciting and
+        # free-feeling" and is 834th by word overlap. So a turn qualifies on
+        # either signal, and `scan_semantic_floor` is what stops the second one
+        # from qualifying everything -- cosine is never zero, so without a floor
+        # every turn in the store would pass.
+        floor = self._config.scan_semantic_floor
+        return [t for t in ranked[:scan]
+                if scores.get(t, 0.0) > 0.0 or sims.get(t, 0.0) >= floor > 0.0]
+
+    def _fuse_semantic(self, query_vector: list[float], eligible: list[int],
+                       by_words: list[int],
+                       ) -> tuple[list[int], dict[int, float]]:
+        """Blend the word ranking with a meaning ranking, best first.
+
+        Fused on rank rather than on score, because a BM25 score and a cosine
+        are not on one scale and nothing in the store says how to put them
+        there. Reciprocal rank fusion is the same device the retrieval side
+        already uses for the same reason, so the two halves of this system
+        combine evidence the same way.
+
+        `scan_semantic` weights the meaning half. At 0 this is never called; at
+        1 the two halves count equally. Measured on the 106 open-domain losses
+        whose answer sits in a turn, inside the eight turns the scan takes,
+        words find it 50.0% of the time, meaning 65.1%, and whichever is better
+        68.9% -- so there is something in each and the blend is worth having
+        rather than a straight swap.
+
+        Returns the similarities alongside the order because the caller needs
+        them to apply its floor, and computing them twice would double the only
+        expensive step here.
+        """
+        vectors = getattr(self._cold, "all_turn_vectors", None)
+        vecs = vectors() if vectors else {}
+        if not vecs:
+            return by_words, {}
+        # Provider vectors are unit length, so the dot product is the cosine.
+        sims = {t: sum(a * b for a, b in zip(query_vector, v))
+                for t in eligible if (v := vecs.get(t))}
+        if not sims:
+            return by_words, {}
+        by_meaning = sorted(sims, key=lambda t: (-sims[t], t))
+        w = self._config.scan_semantic
+        k = self._config.rrf_k or 60
+        word_rank = {t: i for i, t in enumerate(by_words)}
+        mean_rank = {t: i for i, t in enumerate(by_meaning)}
+        # A turn missing from one ranking is not penalised into last place; it
+        # simply scores nothing from that half, which is what "no opinion"
+        # should mean.
+        def fused(t: int) -> float:
+            s = 0.0
+            if t in word_rank:
+                s += 1.0 / (k + word_rank[t] + 1)
+            if t in mean_rank:
+                s += w / (k + mean_rank[t] + 1)
+            return s
+
+        return sorted(eligible, key=lambda t: (-fused(t), t)), sims
+
+    def _turns_by_question(self, query: str | None,
+                           records: list[MemoryRecord],
+                           want: int) -> list[int]:
+        """The `want` turns that best match the question, best first.
+
+        Empty whenever the shipped behaviour should stand: the feature off, no
+        question, nothing to widen to, or a question the scorer has no opinion
+        about. An empty return is the caller's signal to hydrate by fact rank as
+        before, so every path that cannot improve on it leaves it alone.
+
+        `want` is passed in rather than decided here, and that is the whole
+        discipline of this function. It is the number of distinct turns fact
+        rank would have hydrated anyway, so this changes *which* turns are read
+        and never *how many*. A version that returned its own best `n` would be
+        buying accuracy with tokens, which on a budget of 1,000 against RAG's
+        1,430 is not a trade available to us.
+        """
+        pool_size = self._config.hydrate_pool
+        scan = self._config.hydrate_scan
+        if (not pool_size and not scan) or not query or want <= 0:
+            return []
+        pool = list(dict.fromkeys(
+            r.created_at_turn for r in records[:pool_size or len(records)]
+            if r.created_at_turn))
+        span = self._scan_span(records)
+        if span:
+            # The pool is bounded as well as the scan. A retrieved fact from
+            # another conversation is off-subject for the same reason a scanned
+            # turn from one is, and it arrives with rank behind it, which makes
+            # it likelier to win a slot rather than less. The first turn is kept
+            # regardless: it is what defines the span, so excluding it would be
+            # incoherent, and it is the turn fact rank was surest about.
+            keep_first = pool[:1]
+            pool = keep_first + [t for t in pool[1:] if span[0] <= t <= span[1]]
+        pool += self._scanned_turns(query, pool, scan, span)
+        # Nothing to choose from beyond what rank already picked.
+        if len(pool) <= want:
+            return []
+        reader = getattr(self._cold, "text_for_turns", None)
+        if reader is None:
+            return []
+        texts = reader(sorted(pool))
+        scores = source_scores(query, {t: texts.get(t, "") for t in pool})
+        # All-zero means the question shares no distinguishing word with any
+        # turn, which is not a preference for the first `want` of them.
+        if not any(scores.values()):
+            return []
+        # Fact rank breaks ties, so a question that cannot separate two turns
+        # falls back to the order that was measured rather than to dict order.
+        rank = {t: i for i, t in enumerate(pool)}
+        best = sorted(pool, key=lambda t: (-scores.get(t, 0.0), rank[t]))
+
+        # The top-ranked turn is never dropped, and the reason is in the paired
+        # run's regressions. Four of five breaks were the same shape: a gold
+        # spread over two turns, where A answered "showed him his work and gave
+        # him advice" and B answered "showed him his work". Choosing every turn
+        # by question match concentrates hydration on the single best turn and
+        # drops the one holding the rest of the answer, which is a good trade
+        # for a question turning on one qualifier and a bad one for a question
+        # whose answer is a list.
+        #
+        # Keeping the first rank turn costs at most one of `want` slots and
+        # makes this a refinement of the measured behaviour rather than a
+        # replacement for it: the turn fact rank was surest about survives, and
+        # the question spends what is left.
+        keep = pool[:1]
+        chosen = keep + [t for t in best if t not in keep]
+        return chosen[:want]
+
+    def _source_turns(self, records: list[MemoryRecord],
+                      query: str | None = None) -> list[str]:
         """The verbatim turns behind the best-ranked facts.
 
         Facts are a summary of what was said, and the summary is what decays and
@@ -458,8 +873,62 @@ class QueryRouter:
         # long after the event carries an earlier one, which would hydrate a
         # turn that never mentioned it. This is also the field the measurement
         # used, so the shipped behaviour is the one that was measured.
-        turns = sorted({
-            r.created_at_turn for r in records[:budget] if r.created_at_turn
-        })
+        kept = records[:budget]
+        # Chronological for printing, best-ranked first for deciding how much
+        # of each turn survives. `dict.fromkeys` keeps the ranking order and
+        # drops repeats, which matters because one exchange yields six facts.
+        ranked = list(dict.fromkeys(
+            r.created_at_turn for r in kept if r.created_at_turn))
+        chosen = self._turns_by_question(query, records, len(ranked))
+        if chosen:
+            ranked = chosen
+            # The cues below are drawn from the facts of the turns being
+            # hydrated, so they have to follow the turns rather than the rank.
+            wanted = set(ranked)
+            kept = [r for r in records if r.created_at_turn in wanted]
+        turns = sorted(ranked)
         texts = self._cold.text_for_turns(turns)
-        return [texts[t] for t in turns if texts.get(t)]
+
+        keep = self._config.hydrate_lines
+        if keep is None and not self._config.dedupe_source_headers:
+            return [texts[t] for t in turns if texts.get(t)]
+        whole = set(ranked[: self._config.hydrate_full_turns])
+
+        # The cue for a turn is the question plus the facts extracted from that
+        # turn. The facts alone are not enough -- extraction is what dropped the
+        # qualifier the question turns on, so a fact-only cue would reliably
+        # keep the line the fact already covers and discard the one that
+        # completes it. The question alone is not enough either, because a
+        # one-word question shares almost nothing with anything.
+        asked = cue_words(query or "")
+        # The same cue, in numbers. Kept apart from the words rather than merged
+        # into them so that `best_lines` can rank a shared quantity above any
+        # number of shared words, which is what a question asking how much or
+        # how many turns on.
+        asked_numbers = quantity_cues(query or "")
+        by_turn: dict[int, set[str]] = {}
+        numbers_by_turn: dict[int, set[str]] = {}
+        for r in kept:
+            if r.created_at_turn:
+                by_turn.setdefault(r.created_at_turn, set()).update(
+                    cue_words(r.fact_content))
+                numbers_by_turn.setdefault(r.created_at_turn, set()).update(
+                    quantity_cues(r.fact_content))
+
+        out: list[str] = []
+        last_header: str | None = None
+        for turn in turns:
+            text = texts.get(turn)
+            if not text:
+                continue
+            header, body = split_turn(text)
+            if keep is not None and turn not in whole:
+                body = best_lines(body, asked | by_turn.get(turn, set()), keep,
+                                  asked_numbers | numbers_by_turn.get(turn, set()))
+            if header and (not self._config.dedupe_source_headers
+                           or header != last_header):
+                out.append(header)
+            if header:
+                last_header = header
+            out.extend(body)
+        return out

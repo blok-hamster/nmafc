@@ -184,6 +184,37 @@ Q: What did she consider when picking the flat? → the light and the commute
 Q: What motivated her to keep training? → seeing her own progress
 Q: How is the new job going? → busy but rewarding"""
 
+# The rendered context has two blocks and every prompt in this repo describes
+# one of them. `<FACTS>` is what the extractor wrote at ingestion; `<SOURCE>` is
+# verbatim dialogue hydrated at query time, and at hydrate 10 with the question
+# scan on it is 51% of the characters we pay for -- material the model is told
+# nothing about and, via "COPY THE WORDING FROM THE FACTS", told to disfavour.
+#
+# This rule is aimed at one measured shape and no other. Of the 55 open-domain
+# questions arm B loses, the ones where the gold is in the prompt are almost all
+# the WRONG SPECIFIC ITEM rather than a vague or truncated answer:
+#
+#     gold  sunflowers        ours  her four dogs
+#     gold  Witcher 3         ours  childhood sketches
+#     gold  Coco              ours  Shadow
+#     gold  tree pose         ours  Dancer Pose
+#
+# Extraction dropped the qualifier the question turns on, several stored facts
+# then match it equally well, and the model takes the salient one. The dialogue
+# still says which.
+#
+# **It is deliberately a tiebreak and not a precedence.** The screen prices the
+# prize at 12 questions and the exposure at 25 -- wins whose gold is in FACTS
+# and nowhere in SOURCE. A rule reading "prefer SOURCE" puts all 25 at risk to
+# chase the 12. Conditioning on "no fact names the specific thing asked for"
+# leaves a question a fact already answers untouched, which is what those 25
+# are. Worded any more strongly this is a bad bet on its own numbers.
+SOURCE_RULE = """
+The <SOURCE> block is verbatim dialogue from the conversation. <FACTS> is a summary of that dialogue written earlier, and the summary sometimes drops the exact thing a question asks for.
+- Answer from the facts whenever a fact names what the question asks for.
+- When no fact names the specific thing asked for — which flower, which book, which pose, which pet, which game — and a SOURCE line does, answer with the wording from SOURCE. Do not substitute a fact that is merely about the same topic.
+- Never treat SOURCE as a reason to give a longer answer. The length rules above apply to it unchanged."""
+
 
 def build_exchanges(turns: list[dict]) -> list[str]:
     """The exchange text alone, for callers that do not carry dates.

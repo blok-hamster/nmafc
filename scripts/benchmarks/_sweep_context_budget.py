@@ -66,6 +66,7 @@ from nmafc.schemas.memory import DecayConfig  # noqa: E402
 from nmafc.storage.config import NMafcConfig, StorageConfig  # noqa: E402
 from nmafc.wrapper import NeuromorphicMemory  # noqa: E402
 
+from scripts.benchmarks._ab_budget import close_readonly  # noqa: E402
 from scripts.benchmarks.datasets.locomo_loader import load_locomo  # noqa: E402
 
 SCORED = ("single-hop", "temporal", "multi-hop", "open-domain")
@@ -188,7 +189,7 @@ async def run(args: argparse.Namespace) -> None:
             shown = " ".join(f"{b}:{local[b]}" for b in budgets)
             print(f"  {conv.sample_id}: n={len(questions)}  {shown}")
         finally:
-            memory.close()
+            close_readonly(memory)
 
     if not total:
         print("\nnothing measured")

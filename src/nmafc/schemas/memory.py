@@ -315,6 +315,239 @@ class DecayConfig(BaseModel):
         ge=0,
         description="Attach the source turns behind this many top-ranked facts",
     )
+    # How many facts are written into the prompt, when that should differ from
+    # how many are retrieved and hydrated. Unset means all of them, which is the
+    # behaviour every measurement before this field was added; 0 means the
+    # prompt carries source turns and no fact list at all.
+    #
+    # It exists because the context pays twice for the same information. A fact
+    # is a summary of a turn, so a prompt carrying twenty facts and the twenty
+    # turns behind them spends about 619 tokens restating what the other 1,250
+    # already say. The turns are the half worth keeping: extraction strips the
+    # qualifier a question turns on -- gripping, next month, two weeks before 11
+    # August -- and the verbatim turn still has it. Without this field the two
+    # cannot be separated, because `_source_turns` hydrates out of the same list
+    # `format_context` renders, so trimming facts trims the source with them.
+    #
+    # Ranking is untouched. The facts dropped here are the lowest-ranked ones,
+    # they were retrieved and they still decide which turns get hydrated; they
+    # are only not restated.
+    context_facts_top_k: int | None = Field(
+        default=None,
+        ge=0,
+        description="Render only this many top-ranked facts (None = all retrieved)",
+    )
+    # Pattern separation, in the dentate gyrus sense: make similar traces less
+    # similar before they compete, so that near-identical memories do not blur
+    # into one another. This store has the opposite property. Extraction writes a
+    # fresh summary per turn, the same standing fact gets restated across a
+    # conversation, and the rendered fact list was measured to be almost entirely
+    # duplication.
+    #
+    # The evidence that this costs accuracy and not merely tokens: cutting the
+    # rendered list from twenty facts to six fixed 17 open-domain questions that
+    # were previously wrong, and inspection of those 17 showed the fix was the
+    # removal of a competing summary the model had been answering from. Cutting
+    # by rank is a blunt instrument for that -- it discards distinct facts and
+    # duplicates alike, and the same cut broke 26 questions elsewhere. This
+    # removes the duplicates specifically and keeps the distinct facts.
+    #
+    # Overlap is lexical, over the same content words `cue_words` already
+    # extracts for hydration. No embedding call, so it costs nothing per query
+    # and works identically for Cold ROM records, which carry no vector.
+    # Containment rather than Jaccard: "Caroline plays saxophone" is wholly
+    # contained in "Caroline plays saxophone in a jazz quartet", and it is
+    # precisely that redundant restatement Jaccard would score as only half
+    # similar and keep.
+    #
+    # Applied to the rendered facts alone. `_source_turns` still reads the full
+    # ranked list, so hydration is byte-identical to what was measured and the
+    # context can only get smaller, never larger.
+    #
+    # None disables it, which is the behaviour every result to date was measured
+    # under.
+    fact_overlap_max: float | None = Field(
+        default=None,
+        gt=0.0,
+        le=1.0,
+        description="Drop a fact whose content words are this contained in a "
+                    "better-ranked fact's (None = keep every fact)",
+    )
+    # Hydration currently restores whole turns, and a turn is an episode: a
+    # session header, then both speakers' lines. The answer is usually one
+    # clause of one line. At about 50 tokens a turn and 20 turns hydrated, that
+    # is roughly 1,250 tokens to deliver a few dozen useful ones.
+    #
+    # Brains do not replay episodes to recall a detail. The hippocampal index
+    # points at a cortical pattern and reinstates the part the cue calls for.
+    # These two fields are that idea made cheap, and neither costs an API call.
+    #
+    # `hydrate_lines` keeps the N speaker lines of each turn that best match the
+    # cue -- the question, plus the facts that were extracted from that very
+    # turn, which is the closest thing the store has to a pointer at the right
+    # fragment. Order within the turn is preserved, so what survives still reads
+    # as dialogue.
+    hydrate_lines: int | None = Field(
+        default=None,
+        ge=1,
+        description="Keep only the N best-matching speaker lines of each "
+                    "hydrated turn (None = the whole turn)",
+    )
+    # Recall is not uniform, and applying one granularity to forty turns throws
+    # away the ranking that retrieval just spent its effort producing. A strong
+    # cue reinstates rich detail; a weak one reinstates a fragment. So the
+    # best-ranked turns come back whole and the tail comes back as single lines,
+    # which is what lets the window be wide and the bill small at the same time.
+    #
+    # Counted by rank, not by date. The turns are printed in the order they were
+    # said, because that is what makes them readable, but which ones get the
+    # full treatment is decided by where their facts finished in the ranking.
+    hydrate_full_turns: int = Field(
+        default=0,
+        ge=0,
+        description="Top-ranked turns returned whole before `hydrate_lines` "
+                    "applies to the rest",
+    )
+    # `[Session - 1:56 pm on 8 May, 2023]` is repeated verbatim on every turn of
+    # a session, so twenty hydrated turns can carry the same header a dozen
+    # times. Printing it once per run of turns that share it is lossless: the
+    # turns are emitted in order, so a header still applies to everything under
+    # it until the next one.
+    dedupe_source_headers: bool = Field(
+        default=False,
+        description="Print a repeated session header once per run of turns",
+    )
+    # Separate the facts the other signals cannot tell apart, using the turns
+    # they came from. Reranking fuses vector rank, keyword rank and graph
+    # distance, none of which sees the question's wording, so two facts stored
+    # as "Evan is reading X" and "Evan is reading Y" are identical to it even
+    # when the question says which one he found gripping -- the word the
+    # extractor dropped is still sitting in the turn.
+    #
+    # An additive boost rather than a sixth fused list, and the difference is
+    # the whole design. Tried as a list it was worth as much as topping vector
+    # search, because RRF weights every list alike; screened free, that bought
+    # three of 69 open-domain losses and reshuffled the facts of 54 of 60
+    # questions already answered correctly. The diagnosis was near-ties, so the
+    # fix has to be sized like a tie-break. Scale: two facts adjacent in one
+    # fused list differ by about 0.0003, and belonging to a whole extra list is
+    # worth about 0.016. A weight in between moves a fact past its near-copy
+    # and leaves a fact that won on merit where it was.
+    #
+    # Zero by default: it reorders results that have already been measured.
+    source_grounding: float = Field(
+        default=0.0, ge=0.0,
+        description="Additive RRF boost proportional to how well a fact's "
+                    "source turn matches the question",
+    )
+    # Which turns get hydrated is, as shipped, decided entirely by fact rank:
+    # `_source_turns` takes `records[:hydrate_top_k]` and hydrates whatever turns
+    # those facts came from. The question is already used to choose *lines within*
+    # a turn, and never to choose *which turns*.
+    #
+    # That is backwards for the one bucket that decides open-domain. 47 of 116
+    # open-domain losses had the answer in the prompt and lost anyway, because
+    # extraction dropped the qualifier the question turns on -- `gripping`, `two
+    # weeks before 11 August`, `next month` -- leaving several stored facts that
+    # match the question equally. The dropped word is still in the turn. So the
+    # turn worth hydrating is the one that answers the question, and fact rank
+    # cannot know which that is, because nothing upstream of it has read the
+    # question's wording either.
+    #
+    # This widens the pool the turns are chosen *from* without widening how many
+    # are chosen: the same number of turns is hydrated, picked by BM25 of the
+    # question against each turn instead of by the rank of the facts beneath it.
+    # Token cost is therefore the same turn count, and the screen measures the
+    # width rather than assuming it, because turns are not all the same length.
+    #
+    # Zero by default, which is the shipped behaviour exactly.
+    hydrate_pool: int = Field(
+        default=0, ge=0,
+        description="Choose hydrated turns by question match from the turns of "
+                    "this many top facts (0 = by fact rank alone)",
+    )
+    # `hydrate_pool` widens the choice to the turns behind more retrieved facts.
+    # This widens it past retrieval entirely: the top `hydrate_scan` turns of
+    # the whole conversation by question match, whether or not any fact of
+    # theirs was retrieved.
+    #
+    # The distinction is the point. A turn whose facts all rank below the cut is
+    # unreachable under `hydrate_pool` at any setting, because the pool is drawn
+    # from the retrieved list and nothing nominates it. That is most of what is
+    # left of the open-domain gap: of 55 losses, 36 have no content word of the
+    # gold anywhere in the rendered context, and the missing word is typically
+    # one concrete noun -- "Hoodies" where we answered "clothing", "tree pose"
+    # where we answered "Dancer Pose".
+    #
+    # It costs no tokens and takes no retrieval slot. The number of hydrated
+    # turns is still `hydrate_top_k`; only which turns changes, and the turn
+    # fact rank was surest about is still reserved.
+    hydrate_scan: int = Field(
+        default=0, ge=0,
+        description="Also consider the top N turns of the whole conversation "
+                    "by question match, past what retrieval returned "
+                    "(0 = only turns behind retrieved facts)",
+    )
+    # `hydrate_scan` searches every turn in the store, and in a store holding
+    # more than one conversation that is too wide. Asked which novel Evan finds
+    # gripping, four of five hydrated turns came from other people entirely --
+    # two strangers discussing houses, another a screenplay, another a different
+    # novel -- each matching on "gripping" or "novel" and none of them about
+    # Evan. Most of the source budget went on distractors, and the model, shown
+    # a confident wrong candidate first, stopped looking.
+    #
+    # The fix is to bound the search by what retrieval already believes. The
+    # turns of the top few facts say roughly where in the store the answer lives;
+    # turns far outside that range are matching on a word rather than on the
+    # subject. Measured on 90 open-domain losses: the span of the top 5 facts
+    # widened by 80 turns excludes 36% of hydrated turns while still containing
+    # the gold turn in 98% of the questions where the gold is in a turn at all.
+    #
+    # This is inference from retrieval's own output, not knowledge of which
+    # conversation a question came from, so it holds on a store whose sources
+    # were never labelled -- which is the case here, since the merge flattened
+    # ten conversations onto one conversation id.
+    #
+    # Zero disables it, which is the shipped behaviour exactly.
+    scan_span_facts: int = Field(
+        default=0, ge=0,
+        description="Bound scanned turns to the turn range of this many top "
+                    "facts (0 = scan the whole store)",
+    )
+    scan_span_margin: int = Field(
+        default=0, ge=0,
+        description="Widen the scan span by this many turns at each end",
+    )
+    # The scan ranks turns by words, and words are why it works and why it
+    # stops working. It was built to recover a concrete noun the extractor
+    # generalised away -- "Hoodies" where we answered "clothing" -- and BM25 is
+    # exactly the thing that rewards a rare word. It is blind to the failure
+    # that is left, where the question and the turn holding the answer say the
+    # same thing in different words.
+    #
+    # Measured on the 106 open-domain losses whose answer is in a turn, looking
+    # at the eight turns the scan takes: words find that turn 50.0% of the time,
+    # meaning 65.1%, and whichever of the two is better 68.9%. Asked how John
+    # feels while surfing, the turn saying "super exciting and free-feeling" is
+    # 834th by words and 5th by meaning.
+    #
+    # Both halves carry something, hence a blend rather than a swap, fused on
+    # rank because a BM25 score and a cosine share no scale. This weights the
+    # meaning half; 0 is the shipped behaviour and needs no index.
+    scan_semantic: float = Field(
+        default=0.0, ge=0.0,
+        description="Weight of meaning against words when ranking scanned "
+                    "turns (0 = words alone, 1 = equal)",
+    )
+    # A turn with no matching word is not taken, because spending a hydration
+    # slot on an arbitrary turn is worse than leaving it with the fact that
+    # earned it. Meaning needs its own version of that test: a cosine is never
+    # zero, so without a floor every turn in the store would look like a match.
+    scan_semantic_floor: float = Field(
+        default=0.0, ge=0.0,
+        description="Minimum similarity for a turn with no matching word to be "
+                    "taken on meaning alone (0 = never)",
+    )
     recency_boost: float = Field(default=0.0, ge=0.0, description="Additive RRF boost for recent records")
     weight_signal: float = Field(default=0.0, ge=0.0, description="Additive RRF boost proportional to record weight")
     exclude_invalidated: bool = Field(

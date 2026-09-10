@@ -40,6 +40,16 @@ scripts/benchmarks/results/full_v2/stores/
 !scripts/benchmarks/results/full_v2/results.json
 !scripts/benchmarks/results/full_v2/checkpoint_*.json
 !scripts/benchmarks/results/full_v2.log
+# The paired run of 10 September, which is what the README headline reports.
+# Same reasoning as full_v2 and the same two-step: un-ignore the directory so
+# git will descend into it, then un-ignore the files inside. ~3.3 MB, and it is
+# the only copy of the per-question data behind every table in the results
+# section. Both arms' predictions sit on the same row, so the McNemar counts are
+# recomputable rather than quoted.
+!scripts/benchmarks/results/paired_2026_09_10/
+!scripts/benchmarks/results/paired_2026_09_10/*.json
+!scripts/benchmarks/results/paired_2026_09_10/*.py
+!scripts/benchmarks/results/paired_2026_09_10/*.md
 # Run logs (--log-file), hundreds of KB per run and reproducible from a rerun
 logs/
 
