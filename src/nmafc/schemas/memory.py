@@ -70,9 +70,23 @@ class MemoryRecord(BaseModel):
         default=None,
         description="Turn when the fact became true. Falls back to created_at_turn if None.",
     )
-    valid_at_date: Optional[str] = Field(
+    # The date the extractor read off the conversation, kept as it wrote it.
+    #
+    # MemoryStateUpdate.valid_at is a string, and the extraction prompt tells the
+    # model to fill it with "the ISO date string or the relative expression;
+    # downstream code resolves it". Nothing resolved it: the wrapper wrote the
+    # current turn number into the integer valid_at and dropped the string, so
+    # the only dates that ever survived were the ones the extractor happened to
+    # repeat inside fact_content. That is the same failure as the unresolved
+    # link names -- a prompt promising a downstream step that was never built.
+    #
+    # Stored as written rather than parsed into a date. "last summer" and
+    # "around March 2023" are the shapes that actually turn up, and a parser
+    # would have to either invent precision or discard them; the model reading
+    # the context handles both fine.
+    valid_at_text: Optional[str] = Field(
         default=None,
-        description="Original date string from LLM extraction (e.g. '2023-05-08', 'last week'). Displayed to the answering LLM.",
+        description="Calendar date the fact refers to, in the extractor's own wording.",
     )
     invalid_at: Optional[int] = Field(
         default=None,
@@ -108,6 +122,52 @@ class DecayConfig(BaseModel):
     eta: float = Field(default=0.15, gt=0.0, description="Consolidation constant")
     gamma: float = Field(default=0.1, ge=0.0, le=1.0, description="Suppression multiplier")
     w_prune: float = Field(default=0.1, ge=0.0, le=1.0, description="Eviction threshold")
+    # Resolve every extracted link onto an entity that actually exists, by name
+    # overlap, dropping the ones that match nothing.
+    #
+    # Of the 11,902 links written across the ten-store LoCoMo run, 38.8% named
+    # an entity that was never stored -- near misses like
+    # "melanie_lake_sunrise_painting_2022" for the stored
+    # "melanie_lake_sunrise_painting". 78% of them match a real entity at an
+    # overlap of 0.5 or better. This is the dominant cause of the sparse graph
+    # that Spreading Activation has to traverse, and the extraction prompt
+    # already promises the behaviour ("Names matching no stored entity are
+    # discarded") that nothing in the pipeline implemented.
+    resolve_link_targets: bool = Field(
+        default=True,
+        description="Match extracted link names to stored entities; drop unmatchable links",
+    )
+    link_match_threshold: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Minimum token overlap for a written link name to count as naming an entity",
+    )
+    # Reroute a pruned record's inbound links onto whatever it pointed at,
+    # instead of leaving them to be swept up as dead pointers.
+    #
+    # Off by default, on measurement rather than on principle. The mechanism is
+    # sound and the unit tests show it doing exactly what it claims, but pruned
+    # entities are only 5.0% of all link targets, and replaying it over the
+    # finished stores moved usable links per fact from 0.92 to 0.93. Forgetting
+    # is not what disconnected this graph; see resolve_link_targets, which
+    # addresses the 38.8% that is. Kept because it costs nothing when there is
+    # nothing to reroute, and because a workload that prunes more heavily than
+    # LoCoMo would see more from it.
+    rewire_pruned_links: bool = Field(
+        default=False,
+        description="Reroute links around pruned records instead of severing them",
+    )
+    rewire_max_links: int = Field(
+        default=8,
+        ge=0,
+        description="Cap on a record's links after rewiring; direct links are never displaced",
+    )
+    rewire_max_depth: int = Field(
+        default=3,
+        ge=1,
+        description="How many consecutive pruned records a rewiring walk may pass through",
+    )
     # Cosine similarity below which Hot RAM is judged to hold nothing on-topic
     # and the Cold ROM keyword fallback fires. Derived from the separation
     # between answerable and unanswerable queries, measured on two populated
@@ -174,8 +234,87 @@ class DecayConfig(BaseModel):
         default=True,
         description="Search Cold ROM in parallel with Hot, ignoring the theta gate.",
     )
+    # Buffer LTP writebacks in memory and commit them when the caller asks,
+    # instead of on every retrieval.
+    #
+    # Reinforcement rewrites each surviving record through a delete + add, which
+    # on an append-only store means a new table version per query. Measured at
+    # ~650 ms per retrieval against a store of 494 records -- an order of
+    # magnitude more than the search (32 ms), the graph traversal (48 ms) and
+    # the archive scan (0.7 ms) put together, and the largest cost this system
+    # controls.
+    #
+    # On by default. Measured over 240 retrievals against a copy of a finished
+    # LoCoMo store, immediate writeback costs a mean of 501 ms per retrieval
+    # against 300 ms deferred, and the gap widens as the run goes on -- 420 ms
+    # over the first forty queries and 561 ms over the last eighty, because the
+    # tombstoned fragments accumulate. Deferred is flat across the same span
+    # (307, 287, 308, 294). About 260 ms of both figures is the embedding call,
+    # so what this removes is roughly six times the rest of the local work put
+    # together, and it is the only part that grows.
+    #
+    # It is not free of consequence: a buffered reinforcement is invisible to
+    # any retrieval before the flush, so with `weight_signal` above zero a
+    # deferred run can rank differently from an immediate one. At
+    # `weight_signal = 0` (the default) weight does not enter ranking and the
+    # two are equivalent. Set False to restore per-query writeback.
+    #
+    # Nothing is lost by leaving it on. Decay, `maintain()` and `close()` all
+    # flush first, and `reinforcement_buffer_limit` bounds a caller that reaches
+    # none of them.
+    defer_reinforcement_writes: bool = Field(
+        default=True,
+        description="Buffer LTP writebacks until flush_reinforcements() is called",
+    )
+    reinforcement_buffer_limit: int = Field(
+        default=256,
+        gt=0,
+        description="Flush buffered LTP writebacks once this many records are held",
+    )
     rrf_k: int = Field(default=60, ge=1, description="RRF constant k (higher = less weight to top ranks)")
     rerank_top_k: int = Field(default=20, gt=0, description="Max records surviving reranking into prompt")
+    # Drops three things that cost tokens without carrying information: the
+    # word "Valid:", the "- present" suffix, and the clock time on a session
+    # timestamp. Measured over 200 prompts on the finished LoCoMo stores, the
+    # validity span was 227 tokens of a 1,124-token context (20.2%), all 4,000
+    # suffixes in the sample ended "- present" because nothing in those stores
+    # had been invalidated, and the clock time was 11.2 characters of a 25.8-
+    # character date on a benchmark where no question asks the hour. Compact
+    # renders 982 tokens against 1,124: 142 fewer, 12.6%.
+    #
+    # No information leaves the prompt. The date survives in full and an end
+    # date is still rendered when a fact has one, which is the only case where
+    # the range is doing any work.
+    #
+    # On by default on a paired A/B over 1,537 questions, both arms reading the
+    # same stores with the same retrieval and the same judge: 66.23% verbose
+    # against 66.10% compact, 37 fixed and 39 broken, McNemar p = 0.91, at
+    # 1,137 tokens against 997. The honest reading of that is not "identical"
+    # but "any real effect is inside +/-1.2 points", and 12.4% of the context
+    # is a certain saving against an unmeasurable cost. Set False to restore
+    # the full span, which is what the 66.95% headline run rendered.
+    compact_validity: bool = Field(
+        default=True,
+        description="Render validity as '(date)' rather than '(Valid: date - present)'",
+    )
+    # Extraction is lossy, and on 1,540 LoCoMo questions the loss is
+    # measurable: with the top five facts' source turns restored, strict answer
+    # reachability rose from 52.7% to 59.4% overall and from 50.5% to 59.8% on
+    # temporal questions, where the gold is phrased relatively ("two weekends
+    # before 17 July 2023") and the fact carries a date the extractor resolved
+    # on its own. The answers followed: 64.4% -> 66.1% over 1,538 questions,
+    # p = 0.021, at a cost of about 384 tokens.
+    #
+    # On by default at five, because five is what was measured and a library
+    # whose default configuration is not the configuration its numbers were
+    # taken from is one that misreports itself. Set to 0 for the ablation.
+    # Stores written before turn_text existed have nothing to hydrate from and
+    # degrade silently to facts alone, which is the old behaviour exactly.
+    hydrate_top_k: int = Field(
+        default=5,
+        ge=0,
+        description="Attach the source turns behind this many top-ranked facts",
+    )
     recency_boost: float = Field(default=0.0, ge=0.0, description="Additive RRF boost for recent records")
     weight_signal: float = Field(default=0.0, ge=0.0, description="Additive RRF boost proportional to record weight")
     hop_penalty: float = Field(

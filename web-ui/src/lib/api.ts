@@ -6,6 +6,7 @@ import type {
   GraphData,
   MemoryEvent,
   MemoryRecord,
+  RecordSource,
   SearchResult,
   WSMessage,
 } from "./types";
@@ -44,6 +45,8 @@ export const getMutableRecords = () =>
   fetchJSON<MemoryRecord[]>("/api/memory/mutable");
 export const getRecord = (id: string) =>
   fetchJSON<MemoryRecord>(`/api/memory/${id}`);
+export const getRecordSource = (id: string) =>
+  fetchJSON<RecordSource>(`/api/memory/${id}/source`);
 export const getEntityRecords = (name: string) =>
   fetchJSON<MemoryRecord[]>(`/api/memory/entity/${encodeURIComponent(name)}`);
 export const searchMemory = (q: string, topK = 10) =>

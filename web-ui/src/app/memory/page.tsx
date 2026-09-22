@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getAllRecords, searchMemory } from "@/lib/api";
+import { getAllRecords, getRecordSource, searchMemory } from "@/lib/api";
 import { useWS } from "@/components/layout/WebSocketProvider";
 import { useTenant } from "@/components/TenantProvider";
 import { IconX, IconArrowUp, IconArrowDown } from "@/components/icons";
-import type { MemoryRecord } from "@/lib/types";
+import type { MemoryRecord, RecordSource } from "@/lib/types";
 
 type SortKey = "entity_name" | "memory_type" | "weight" | "consolidation_index" | "created_at_turn";
 
@@ -134,7 +134,12 @@ export default function MemoryPage() {
                 </td>
                 <td className="px-4 py-2.5 font-mono text-zinc-300">{rec.weight.toFixed(4)}</td>
                 <td className="px-4 py-2.5 font-mono text-zinc-400">{rec.consolidation_index}</td>
-                <td className="px-4 py-2.5 font-mono text-zinc-500">{rec.created_at_turn}</td>
+                <td className="px-4 py-2.5 font-mono text-zinc-500">
+                  {rec.created_at_turn}
+                  {rec.created_date && (
+                    <span className="block text-xs text-zinc-600">{rec.created_date}</span>
+                  )}
+                </td>
               </tr>
             ))}
             {display.length === 0 && (
@@ -175,6 +180,38 @@ function RecordDetail({
   record: MemoryRecord;
   onClose: () => void;
 }) {
+  const [source, setSource] = useState<RecordSource | null>(null);
+  const [sourceLoading, setSourceLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSourceLoading(true);
+    getRecordSource(record.id)
+      .then((s) => { if (!cancelled) setSource(s); })
+      .catch(() => { if (!cancelled) setSource(null); })
+      .finally(() => { if (!cancelled) setSourceLoading(false); });
+    return () => { cancelled = true; };
+  }, [record.id]);
+
+  const validity = source?.validity;
+
+  const validLabel =
+    validity?.valid_at_text ||
+    (validity?.valid_date
+      ? validity.valid_date
+      : validity?.valid_at != null
+        ? `Turn ${validity.valid_at}`
+        : record.valid_at_text || `Turn ${record.valid_at ?? record.created_at_turn}`);
+
+  const invalidLabel =
+    validity?.invalid_date || (validity?.invalid_at != null
+      ? `Turn ${validity.invalid_at}`
+      : record.invalid_at != null
+        ? `Turn ${record.invalid_at}`
+        : null);
+
+  const sourcedTurns = source?.source_turns.filter((t) => t.text) ?? [];
+
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-4 space-y-3">
       <div className="flex justify-between items-start">
@@ -199,9 +236,58 @@ function RecordDetail({
         </div>
         <div>
           <span className="text-zinc-500">Created</span>
-          <p className="font-mono text-zinc-200">Turn {record.created_at_turn}</p>
+          <p className="font-mono text-zinc-200">
+            Turn {record.created_at_turn}
+            {record.created_date && (
+              <span className="block text-zinc-400">{record.created_date}</span>
+            )}
+          </p>
         </div>
       </div>
+
+      <div>
+        <span className="text-xs text-zinc-500">Validity</span>
+        <div className="mt-1 space-y-1 text-xs">
+          <p className="font-mono text-zinc-200">
+            Valid from {validLabel}
+          </p>
+          {invalidLabel && (
+            <p className="font-mono text-zinc-400">Superseded {invalidLabel}</p>
+          )}
+          {validity?.has_dates === false && !record.valid_at_text && (
+            <p className="text-zinc-600">
+              Store has no calendar dates — backfill with{" "}
+              <code className="text-zinc-500">_backfill_turn_dates.py</code> for dated facts.
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div>
+        <span className="text-xs text-zinc-500">Source turns</span>
+        <div className="mt-1 max-h-48 overflow-auto space-y-2">
+          {sourceLoading ? (
+            <p className="text-xs text-zinc-600">Loading source…</p>
+          ) : sourcedTurns.length > 0 ? (
+            sourcedTurns.map((t) => (
+              <blockquote key={t.turn} className="border-l-2 border-zinc-600 pl-3 text-xs">
+                <p className="font-mono text-zinc-400">
+                  Turn {t.turn}
+                  {t.timestamp && <span> · {t.timestamp}</span>}
+                </p>
+                <p className="text-zinc-300 mt-0.5 whitespace-pre-wrap">{t.text}</p>
+              </blockquote>
+            ))
+          ) : (
+            <p className="text-xs text-zinc-600">
+              No source text stored — run{" "}
+              <code className="text-zinc-500">_backfill_turn_text.py</code> to restore verbatim
+              turns for this store.
+            </p>
+          )}
+        </div>
+      </div>
+
       {record.related_entities.length > 0 && (
         <div>
           <span className="text-xs text-zinc-500">Related Entities</span>

@@ -75,6 +75,51 @@ class ColdStorage(ColdStorageBase):
             CREATE INDEX IF NOT EXISTS idx_agent_conversation
                 ON memory_event_log(agent_id, conversation_id);
 
+            -- When each turn actually happened, in whatever wording the caller
+            -- uses. One row per turn rather than per fact: the date belongs to
+            -- the conversation, not to each thing said in it, and a turn
+            -- routinely produces six facts that would otherwise carry six
+            -- copies of one string.
+            --
+            -- This exists because turn numbers were reaching the model in place
+            -- of dates. Facts were presented as "(Valid: turn 220 - present)",
+            -- and an ordinal is not a date, so answers came back saying "it was
+            -- mentioned in turn 220 but no specific date is given" -- which is
+            -- a correct reading of what it was shown.
+            CREATE TABLE IF NOT EXISTS turn_timestamps (
+                agent_id TEXT NOT NULL DEFAULT 'default',
+                conversation_id TEXT NOT NULL DEFAULT 'default',
+                turn INTEGER NOT NULL,
+                occurred_at TEXT NOT NULL,
+                PRIMARY KEY (agent_id, conversation_id, turn)
+            );
+
+            -- What was actually said, kept verbatim, one row per turn.
+            --
+            -- Extraction is lossy and nothing else in this store survives it:
+            -- the hot vector and the event log both hold only the summarised
+            -- fact, so once a turn is processed its wording is gone. Measured
+            -- over 1,540 questions, restoring the source text behind the five
+            -- best-ranked facts moved strict answer reachability from 52.7% to
+            -- 59.4%, and on the temporal category from 50.5% to 59.8%, because
+            -- the dataset's own phrasing ("two weekends before 17 July 2023")
+            -- lives in the utterance while the fact carries a date the
+            -- extractor resolved for itself.
+            --
+            -- Deliberately outside memory_fts and carrying no embedding. Facts
+            -- are what decays and what gets ranked; this is evidence, reachable
+            -- only through a fact that already won a slot, by its turn number.
+            -- Indexing it would put raw turns into the candidate pool where
+            -- they would compete with facts for the retrieval budget, which is
+            -- the one way storing it could cost anything.
+            CREATE TABLE IF NOT EXISTS turn_text (
+                agent_id TEXT NOT NULL DEFAULT 'default',
+                conversation_id TEXT NOT NULL DEFAULT 'default',
+                turn INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                PRIMARY KEY (agent_id, conversation_id, turn)
+            );
+
             CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts
                 USING fts5(entity_name, fact_content, content=memory_event_log, content_rowid=id);
 
@@ -138,6 +183,66 @@ class ColdStorage(ColdStorageBase):
         self._vector_cache = None
         return cursor.lastrowid  # type: ignore[return-value]
 
+    def record_turn_timestamp(self, turn: int, occurred_at: str) -> None:
+        """Note when a turn happened, so its facts can be dated at answer time.
+
+        Last write wins. Re-ingesting a turn or backfilling a finished store
+        should correct the date rather than fail on the primary key.
+        """
+        self._conn.execute(
+            """INSERT INTO turn_timestamps (agent_id, conversation_id, turn, occurred_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(agent_id, conversation_id, turn)
+               DO UPDATE SET occurred_at = excluded.occurred_at""",
+            (self._agent_id, self._conversation_id, turn, occurred_at),
+        )
+        self._conn.commit()
+
+    def turn_timestamps(self) -> dict[int, str]:
+        """Every dated turn for this tenant, as turn -> date."""
+        rows = self._conn.execute(
+            "SELECT turn, occurred_at FROM turn_timestamps "
+            "WHERE agent_id = ? AND conversation_id = ?",
+            (self._agent_id, self._conversation_id),
+        ).fetchall()
+        return {row["turn"]: row["occurred_at"] for row in rows}
+
+    def record_turn_text(self, turn: int, text: str) -> None:
+        """Keep a turn's wording, so facts extracted from it stay recoverable.
+
+        Last write wins, matching `record_turn_timestamp`: re-ingesting a turn
+        or backfilling a finished store should correct the text rather than
+        fail on the primary key.
+        """
+        self._conn.execute(
+            """INSERT INTO turn_text (agent_id, conversation_id, turn, text)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(agent_id, conversation_id, turn)
+               DO UPDATE SET text = excluded.text""",
+            (self._agent_id, self._conversation_id, turn, text),
+        )
+        self._conn.commit()
+
+    def text_for_turns(self, turns: list[int]) -> dict[int, str]:
+        """The wording of specific turns, as turn -> text.
+
+        Takes the turns wanted rather than returning the lot. A conversation
+        holds hundreds of turns and a prompt hydrates a handful, so reading the
+        whole table per query would be the expensive way to answer a question
+        the primary key already answers.
+        """
+        wanted = sorted({t for t in turns if t})
+        if not wanted:
+            return {}
+        placeholders = ",".join("?" for _ in wanted)
+        rows = self._conn.execute(
+            f"""SELECT turn, text FROM turn_text
+                WHERE agent_id = ? AND conversation_id = ?
+                  AND turn IN ({placeholders})""",
+            (self._agent_id, self._conversation_id, *wanted),
+        ).fetchall()
+        return {row["turn"]: row["text"] for row in rows}
+
     @staticmethod
     def _pack(embedding: list[float] | None) -> bytes | None:
         """Float32 little-endian bytes. Half the size of float64 and lossless
@@ -156,6 +261,43 @@ class ColdStorage(ColdStorageBase):
         # it. Without this a superseded fact keeps being returned by semantic
         # search after it has been withdrawn.
         self._vector_cache = None
+
+    def invalidate_facts(self, facts: list[tuple[str, str, int]]) -> int:
+        """Record in the archive that a fact has been superseded.
+
+        Hot RAM already drops invalidated records from search, but the router
+        queries the archive on every retrieval, so without this the superseded
+        fact is pulled straight back into the prompt and the invalidation is
+        invisible to the answer. Measured over 101 belief-update questions: with
+        Hot-only invalidation the stale value still reached the prompt 64 times
+        out of 101, one MORE than with no invalidation at all.
+
+        Matched on (entity_name, fact_content) because the archive autoincrements
+        its own primary key and does not carry the Hot record's UUID. Rows
+        already carrying an `invalid_at` are left alone, so the earliest
+        supersession stands.
+
+        Distinct from `mark_inactive`, and deliberately so. A pruned fact is
+        weak but still true and stays reachable; a superseded fact is wrong.
+        """
+        if not facts:
+            return 0
+        changed = 0
+        for entity_name, fact_content, turn in facts:
+            cursor = self._conn.execute(
+                """UPDATE memory_event_log SET invalid_at = ?
+                   WHERE agent_id = ? AND conversation_id = ?
+                     AND entity_name = ? AND fact_content = ?
+                     AND invalid_at IS NULL""",
+                (turn, self._agent_id, self._conversation_id,
+                 entity_name, fact_content),
+            )
+            changed += cursor.rowcount
+        self._conn.commit()
+        # Same reasoning as mark_inactive: the matrix is built from the rows
+        # that survive the filter, so it is stale the moment one is withdrawn.
+        self._vector_cache = None
+        return changed
 
     def get_active_events(self) -> list[dict[str, Any]]:
         cursor = self._conn.execute(
@@ -183,7 +325,7 @@ class ColdStorage(ColdStorageBase):
             """SELECT mel.* FROM memory_fts
                JOIN memory_event_log mel ON memory_fts.rowid = mel.id
                WHERE memory_fts MATCH ? AND mel.agent_id = ? AND mel.conversation_id = ?
-                 AND mel.is_active = 1
+                 AND mel.is_active = 1 AND mel.invalid_at IS NULL
                ORDER BY rank
                LIMIT ?""",
             (sanitized, self._agent_id, self._conversation_id, limit),
@@ -227,7 +369,7 @@ class ColdStorage(ColdStorageBase):
         cursor = self._conn.execute(
             f"""SELECT * FROM memory_event_log
                 WHERE id IN ({placeholders}) AND agent_id = ? AND conversation_id = ?
-                  AND is_active = 1""",
+                  AND is_active = 1 AND invalid_at IS NULL""",
             [i for i, _ in chosen] + [self._agent_id, self._conversation_id],
         )
         by_id = {row["id"]: dict(row) for row in cursor.fetchall()}
@@ -250,7 +392,7 @@ class ColdStorage(ColdStorageBase):
         cursor = self._conn.execute(
             """SELECT id, embedding FROM memory_event_log
                WHERE agent_id = ? AND conversation_id = ?
-                 AND is_active = 1 AND embedding IS NOT NULL
+                 AND is_active = 1 AND invalid_at IS NULL AND embedding IS NOT NULL
                ORDER BY id ASC""",
             (self._agent_id, self._conversation_id),
         )

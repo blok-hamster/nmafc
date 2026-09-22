@@ -12,12 +12,22 @@ from dataclasses import dataclass, field
 
 @dataclass
 class ArmResponse:
-    """Response from a single question answered by a benchmark arm."""
+    """Response from a single question answered by a benchmark arm.
+
+    `latency_ms` excludes time spent queueing for API quota; `throttle_ms`
+    reports that queueing separately. The two sum to the wall clock the
+    question took. They are kept apart because the shared deployment quota is
+    drawn on by every arm at once, and the arms draw on it very unequally -- an
+    arm sending 20,000 tokens per question starves one sending 650, so a
+    combined figure measures the benchmark's scheduling rather than either
+    architecture. Only `latency_ms` is comparable across arms.
+    """
     answer: str
     latency_ms: float
     prompt_tokens: int
     completion_tokens: int
     context_tokens: int
+    throttle_ms: float = 0.0
 
 
 @dataclass
@@ -25,6 +35,7 @@ class ArmMetrics:
     """Accumulated operational metrics for a benchmark arm."""
     arm_name: str
     _latencies: list[float] = field(default_factory=list)
+    _throttles: list[float] = field(default_factory=list)
     _prompt_tokens: list[int] = field(default_factory=list)
     _completion_tokens: list[int] = field(default_factory=list)
     _context_tokens: list[int] = field(default_factory=list)
@@ -34,6 +45,7 @@ class ArmMetrics:
     def record(self, response: ArmResponse) -> None:
         """Record metrics from a single response."""
         self._latencies.append(response.latency_ms)
+        self._throttles.append(response.throttle_ms)
         self._prompt_tokens.append(response.prompt_tokens)
         self._completion_tokens.append(response.completion_tokens)
         self._context_tokens.append(response.context_tokens)
@@ -74,6 +86,14 @@ class ArmMetrics:
         idx = int(len(sorted_lat) * 0.95)
         return sorted_lat[min(idx, len(sorted_lat) - 1)]
 
+    @property
+    def avg_throttle_ms(self) -> float:
+        return statistics.mean(self._throttles) if self._throttles else 0.0
+
+    @property
+    def p50_throttle_ms(self) -> float:
+        return statistics.median(self._throttles) if self._throttles else 0.0
+
     def to_dict(self) -> dict:
         """Serialize metrics to a dictionary for JSON output."""
         return {
@@ -85,10 +105,18 @@ class ArmMetrics:
                 "total": self.total_tokens,
                 "avg_context_per_question": round(self.avg_context_tokens, 1),
             },
+            # Work only. See ArmResponse for why queueing is reported apart.
             "latency_ms": {
                 "avg": round(self.avg_latency_ms, 1),
                 "p50": round(self.p50_latency_ms, 1),
                 "p95": round(self.p95_latency_ms, 1),
+            },
+            # Time spent waiting on the shared deployment quota. A property of
+            # the run's scheduling, not of the arm; reported so a reader can
+            # see how much of the wall clock it accounted for.
+            "throttle_ms": {
+                "avg": round(self.avg_throttle_ms, 1),
+                "p50": round(self.p50_throttle_ms, 1),
             },
             "storage": {
                 "hot_records": self.hot_storage_records,

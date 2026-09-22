@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import TYPE_CHECKING
 
 from nmafc.engine.reinforcement import reinforce
@@ -11,6 +12,9 @@ from nmafc.storage.hot import HotStorage
 
 if TYPE_CHECKING:
     from nmafc.storage.event_log import EventLog
+
+# Leading clock time on a session timestamp: "7:18 pm on 27 May, 2023".
+CLOCK_PREFIX = re.compile(r"^\d{1,2}:\d{2}\s*[ap]\.?m\.?\s+on\s+", re.I)
 
 
 class QueryRouter:
@@ -33,6 +37,67 @@ class QueryRouter:
         self._cold = cold
         self._embedder = embedder
         self._config = config
+        # Reinforcements held back when defer_reinforcement_writes is on, keyed
+        # by record id so a record retrieved twice before a flush ends up with
+        # the higher consolidation index rather than two queued writes.
+        self._pending_reinforcements: dict[str, int] = {}
+        self._pending_turn = 0
+        # turn -> date, read once from the archive. Loaded lazily because a
+        # store that was never given dates should not pay a query per retrieval
+        # to rediscover that, and refreshed by reset_turn_dates() when ingestion
+        # adds turns after the router has already answered something.
+        self._turn_dates: dict[int, str] | None = None
+
+    def reset_turn_dates(self) -> None:
+        """Forget the cached turn dates, so newly ingested turns are picked up."""
+        self._turn_dates = None
+
+    @staticmethod
+    def _day(stamp: str) -> str:
+        """A session timestamp with its clock time removed, if it has one.
+
+        Leaves anything else exactly as it came in: the extractor's own wording
+        ("last summer"), a turn number fallback, or a date that never carried a
+        time. Only the one shape it recognises is edited.
+        """
+        return CLOCK_PREFIX.sub("", stamp)
+
+    def _date_for(self, turn: int | None) -> str | None:
+        """The calendar date of a turn, or None if this store has no dates.
+
+        Falls back to the nearest earlier dated turn. Dates are recorded per
+        turn but a conversation is dated per session, so an undated turn sits
+        inside the session opened by the last dated one -- which is a better
+        answer than none, and never invents a date for a store that has no
+        dates at all.
+        """
+        if turn is None:
+            return None
+        if self._turn_dates is None:
+            getter = getattr(self._cold, "turn_timestamps", None)
+            self._turn_dates = getter() if callable(getter) else {}
+        if not self._turn_dates:
+            return None
+        if turn in self._turn_dates:
+            return self._turn_dates[turn]
+        earlier = [t for t in self._turn_dates if t <= turn]
+        return self._turn_dates[max(earlier)] if earlier else None
+
+    def flush_reinforcements(self) -> int:
+        """Commit buffered LTP writebacks and report how many records moved.
+
+        A no-op unless `defer_reinforcement_writes` is set, since without it
+        nothing is ever buffered. Callers that defer must call this before any
+        decay pass and before closing the store: decay reads the weight and the
+        consolidation index that the buffer is holding, and an unflushed buffer
+        is simply lost when the process ends.
+        """
+        if not self._pending_reinforcements:
+            return 0
+        updates = list(self._pending_reinforcements.items())
+        self._hot.apply_reinforcements(updates, turn=self._pending_turn)
+        self._pending_reinforcements = {}
+        return len(updates)
 
     async def retrieve(
         self,
@@ -153,7 +218,40 @@ class QueryRouter:
                     (reinforced.id, reinforced.consolidation_index)
                 )
 
-        self._hot.apply_reinforcements(reinforcements, turn=current_turn)
+        if self._config.defer_reinforcement_writes:
+            # Buffer instead of writing, and count from the buffer rather than
+            # from `reinforcements`. Every index in that list was computed from
+            # a record just read out of the store, and while writes are held
+            # back the store still says k = 0, so a record retrieved three times
+            # would be handed k = 1 three times over. Once a record is buffered
+            # the buffer is the authority on its index, so each further
+            # retrieval adds one to what is already held -- matching the
+            # immediate path, where the increment reads the value the previous
+            # retrieval wrote.
+            #
+            # The turn stamp is the latest retrieval's, which is what the
+            # immediate path would have written for the records touched last;
+            # earlier buffered records get a stamp later than the retrieval that
+            # earned it, and that is the accuracy this trade gives up. It is
+            # read only by decay, so flushing before any decay pass bounds the
+            # difference by the flush interval.
+            for record_id, new_k in reinforcements:
+                held = self._pending_reinforcements.get(record_id)
+                self._pending_reinforcements[record_id] = (
+                    new_k if held is None else held + 1
+                )
+            self._pending_turn = max(self._pending_turn, current_turn)
+            # A caller that only ever retrieves reaches none of the three
+            # flush points -- decay, maintain, close -- so without a bound the
+            # buffer grows for the life of the process and the reinforcement it
+            # holds is never visible to anything. The bound turns "written on
+            # every query" into "written every few dozen queries", which is
+            # where the saving comes from, while keeping the buffer finite and
+            # its staleness capped at a known number of records.
+            if len(self._pending_reinforcements) >= self._config.reinforcement_buffer_limit:
+                self.flush_reinforcements()
+        else:
+            self._hot.apply_reinforcements(reinforcements, turn=current_turn)
 
         # Emit RETRIEVAL events
         if event_logger is not None:
@@ -278,60 +376,95 @@ class QueryRouter:
         return found
 
     def format_context(self, records: list[MemoryRecord]) -> str:
-        """Format retrieved memories with entity grouping and connection hints.
+        """Format retrieved memories using Zep-style structured fact presentation.
 
-        Groups facts by entity, then explicitly highlights cross-entity
-        relationships to help the LLM connect dots across multiple hops.
+        Facts are presented as discrete items with temporal validity ranges.
+        This gives the LLM scannable, atomic facts rather than a narrative list.
+
+        Validity is shown as a calendar date wherever the store knows one, and
+        as a turn number only where it does not. The distinction is not
+        cosmetic. Presented as "(Valid: turn 220 - present)", a dated question
+        is unanswerable however good the retrieval was, and the run's own
+        answers show the model saying so: "it was mentioned in turn 220 and is
+        valid from turn 220 onward, but no specific date". Twenty answers in
+        that run quoted a turn number back to the user as if it were a date.
+
+        A per-fact date recorded by the extractor wins over the date of the turn
+        that mentioned it, because facts are routinely stated after the event
+        ("last year we drove to the coast"). Turn dates are the fallback, and
+        turn numbers the fallback of last resort.
         """
         if not records:
             return ""
 
-        # Group facts by entity
-        by_entity: dict[str, list[MemoryRecord]] = {}
-        for r in records:
-            key = r.entity_name.lower()
-            by_entity.setdefault(key, []).append(r)
-
-        # Build an index of which entities are mentioned in which facts
-        entity_mentions: dict[str, set[str]] = {}
-        for r in records:
-            for rel in r.related_entities:
-                entity_mentions.setdefault(rel.lower(), set()).add(r.entity_name.lower())
-
         lines = ["<FACTS>"]
+        for r in records:
+            valid_from = (
+                r.valid_at_text
+                or self._date_for(r.valid_at or r.created_at_turn)
+                or f"turn {r.valid_at or r.created_at_turn}"
+            )
+            valid_to = None
+            if r.invalid_at:
+                valid_to = self._date_for(r.invalid_at) or f"turn {r.invalid_at}"
 
-        # Grouped facts by entity
-        for entity_name, recs in sorted(by_entity.items()):
-            lines.append(f"[{entity_name}]")
-            for r in recs:
-                if r.valid_at_date:
-                    valid_from = r.valid_at_date
-                else:
-                    valid_from = f"turn {r.valid_at}" if r.valid_at else f"turn {r.created_at_turn}"
-                valid_to = f"turn {r.invalid_at}" if r.invalid_at else "present"
-                lines.append(f"  {r.fact_content} (Valid: {valid_from} - {valid_to})")
-
-        # Highlight cross-entity connections (multi-hop bridge)
-        connections: list[str] = []
-        seen_conns: set[tuple[str, str]] = set()
-        for entity_a, mentions in entity_mentions.items():
-            for entity_b in mentions:
-                if entity_a == entity_b:
-                    continue
-                pair = tuple(sorted([entity_a, entity_b]))
-                if pair in seen_conns:
-                    continue
-                seen_conns.add(pair)
-                # Only show connections where both entities have facts
-                if entity_a in by_entity and entity_b in by_entity:
-                    connections.append(
-                        f"  {entity_a} <-> {entity_b} (connected via shared references)"
-                    )
-
-        if connections:
-            lines.append("")
-            lines.append("[CONNECTIONS]")
-            lines.extend(connections)
-
+            if self._config.compact_validity:
+                # "Valid:" and "- present" are the same on every line that
+                # carries them, so they cost tokens without telling the model
+                # anything it could not assume. An end date is only rendered
+                # when the fact actually has one, which is the only case where
+                # the range is doing work.
+                #
+                # The clock time goes with them. A session timestamp reads
+                # "7:18 pm on 27 May, 2023" and the hour is 11.2 characters of
+                # the 25.8, on a benchmark where no question asks what time of
+                # day anything happened. Stripped only from the rendered
+                # validity: the SOURCE block keeps its headers as stored,
+                # because verbatim that has been edited is not verbatim.
+                span = (
+                    f"{self._day(valid_from)} to {self._day(valid_to)}"
+                    if valid_to
+                    else self._day(valid_from)
+                )
+                lines.append(f"{r.fact_content} ({span})")
+            else:
+                lines.append(
+                    f"{r.fact_content} (Valid: {valid_from} - {valid_to or 'present'})"
+                )
         lines.append("</FACTS>")
+
+        hydrated = self._source_turns(records)
+        if hydrated:
+            lines.append("")
+            lines.append("<SOURCE>")
+            lines.extend(hydrated)
+            lines.append("</SOURCE>")
+
         return "\n".join(lines)
+
+    def _source_turns(self, records: list[MemoryRecord]) -> list[str]:
+        """The verbatim turns behind the best-ranked facts.
+
+        Facts are a summary of what was said, and the summary is what decays and
+        what gets ranked. This restores the wording for the few facts that won
+        the top of the ranking, which is the only place it is worth the tokens:
+        the source of the fifth-ranked fact is evidence, the source of the
+        twentieth is noise with a paragraph attached.
+
+        Deduplicated by turn rather than by fact. One exchange routinely yields
+        six facts, so hydrating five facts is usually three or four turns, and
+        billing per fact would pay for the same text repeatedly.
+        """
+        budget = self._config.hydrate_top_k
+        if not budget:
+            return []
+        # The turn the fact was extracted from, not `valid_at`. They usually
+        # agree, but `valid_at` is when the fact became true and a fact stated
+        # long after the event carries an earlier one, which would hydrate a
+        # turn that never mentioned it. This is also the field the measurement
+        # used, so the shipped behaviour is the one that was measured.
+        turns = sorted({
+            r.created_at_turn for r in records[:budget] if r.created_at_turn
+        })
+        texts = self._cold.text_for_turns(turns)
+        return [texts[t] for t in turns if texts.get(t)]

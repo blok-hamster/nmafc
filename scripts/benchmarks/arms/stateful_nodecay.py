@@ -25,7 +25,8 @@ from nmafc.storage.config import NMafcConfig, StorageConfig
 from nmafc.wrapper import NeuromorphicMemory
 
 from ..evaluation.metrics import ArmResponse
-from .base import BenchmarkArm, SHORT_ANSWER_RULES, build_exchanges, strip_answer
+from .base import (BenchmarkArm, SHORT_ANSWER_RULES, build_dated_exchanges,
+                   strip_answer, timer_split, timer_start)
 
 ANSWER_SYSTEM_PROMPT = """You have a knowledge graph of facts from past conversations, shown in <FACTS> tags.
 Answer the question using these facts. Combine and reason across multiple facts when needed.
@@ -80,16 +81,16 @@ class StatefulNoDecayArm(BenchmarkArm):
         deliberately: it is the no-decay control, and its value comes from being
         the one arm nothing has been done to. Resume machinery is a change.
         """
-        for index, exchange in enumerate(build_exchanges(turns)):
+        for index, (exchange, occurred_at) in enumerate(build_dated_exchanges(turns)):
             if index < start_at:
                 continue
-            await self._memory.process_turn(user_msg=exchange)
+            await self._memory.process_turn(user_msg=exchange, occurred_at=occurred_at)
             if on_progress is not None:
                 on_progress(index + 1, self._memory.current_turn)
 
     async def answer_question(self, question: str) -> ArmResponse:
         """Answer using neuromorphic retrieval (without decay)."""
-        start = time.perf_counter()
+        mark = timer_start()
 
         retrieved = await self._memory._router.retrieve(
             question, self._memory.current_turn + 1
@@ -105,7 +106,7 @@ class StatefulNoDecayArm(BenchmarkArm):
             messages=[{"role": "user", "content": question}],
             system_prompt=system,
         )
-        latency_ms = (time.perf_counter() - start) * 1000
+        latency_ms, throttle_ms = timer_split(mark)
 
         prompt_tokens = (len(system) + len(question)) // 4
         completion_tokens = len(response_text) // 4
@@ -113,6 +114,7 @@ class StatefulNoDecayArm(BenchmarkArm):
         response = ArmResponse(
             answer=strip_answer(response_text),
             latency_ms=latency_ms,
+            throttle_ms=throttle_ms,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             context_tokens=context_tokens,
@@ -135,3 +137,9 @@ class StatefulNoDecayArm(BenchmarkArm):
             self.metrics.hot_storage_records = stats.get("count", 0)
             cold_stats = self._memory.get_cold_stats()
             self.metrics.cold_storage_events = cold_stats.get("total_events", 0)
+
+    def compact_storage(self) -> bool:
+        """Settle buffered writebacks and compact the append-only store."""
+        if not self._memory:
+            return False
+        return self._memory.maintain()

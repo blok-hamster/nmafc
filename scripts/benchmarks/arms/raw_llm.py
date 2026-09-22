@@ -17,15 +17,18 @@ import time
 from nmafc.integration.base import LLMProvider
 
 from ..evaluation.metrics import ArmResponse
-from .base import BenchmarkArm, SHORT_ANSWER_RULES
+from .base import BenchmarkArm, SHORT_ANSWER_RULES, timer_split, timer_start
 
+# Refusal clause removed on 22 August 2026, for the reason set out in rag.py:
+# SHORT_ANSWER_RULES ends with "NEVER say 'No information available'", and the
+# two memory arms carry no refusal clause to contradict it. Keeping one here
+# would have left the baselines reading a self-contradictory prompt while the
+# arms they exist to challenge read a clean one.
 ANSWER_SYSTEM_PROMPT = (
     "You are a conversational AI assistant with access to the full "
     "conversation history below.\n"
     "Answer the user's question based ONLY on information from the "
     "conversation history.\n"
-    "If the answer is not in the history, say \"I don't know\" or "
-    "\"This information is not available.\"\n"
     "Be concise — answer in a few words or a short phrase when possible."
     + SHORT_ANSWER_RULES
 )
@@ -63,12 +66,12 @@ class RawLLMArm(BenchmarkArm):
 
         system = ANSWER_SYSTEM_PROMPT + "\n\n" + CONTEXT_PREFIX + history_text + CONTEXT_SUFFIX
 
-        start = time.perf_counter()
+        mark = timer_start()
         response_text = await self._llm.chat(
             messages=[{"role": "user", "content": question}],
             system_prompt=system,
         )
-        latency_ms = (time.perf_counter() - start) * 1000
+        latency_ms, throttle_ms = timer_split(mark)
 
         prompt_tokens = (len(system) + len(question)) // 4
         completion_tokens = len(response_text) // 4
@@ -76,6 +79,7 @@ class RawLLMArm(BenchmarkArm):
         response = ArmResponse(
             answer=response_text.strip(),
             latency_ms=latency_ms,
+            throttle_ms=throttle_ms,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             context_tokens=context_tokens,

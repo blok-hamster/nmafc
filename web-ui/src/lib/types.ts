@@ -20,6 +20,31 @@ export interface MemoryRecord {
   last_reinforced_turn: number;
   is_active: boolean;
   related_entities: string[];
+  valid_at: number | null;
+  valid_at_text: string | null;
+  invalid_at: number | null;
+  created_date?: string | null;
+}
+
+export interface SourceTurn {
+  turn: number;
+  timestamp: string | null;
+  text: string | null;
+}
+
+export interface RecordValidity {
+  valid_at: number | null;
+  valid_at_text: string | null;
+  valid_date: string | null;
+  invalid_at: number | null;
+  invalid_date: string | null;
+  has_dates: boolean;
+}
+
+export interface RecordSource {
+  record: MemoryRecord;
+  validity: RecordValidity;
+  source_turns: SourceTurn[];
 }
 
 export interface MemoryEvent {

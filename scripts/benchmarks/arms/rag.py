@@ -37,12 +37,22 @@ from nmafc.storage.config import StorageConfig
 from nmafc.storage.hot import HotStorage
 
 from ..evaluation.metrics import ArmResponse
-from .base import BenchmarkArm, SHORT_ANSWER_RULES
+from .base import BenchmarkArm, SHORT_ANSWER_RULES, timer_split, timer_start
 
+# The refusal clause that used to sit here ("If the answer is not in the
+# excerpts, say I don't know...") was removed on 22 August 2026. SHORT_ANSWER_RULES,
+# which is appended immediately below, now ends with "NEVER say 'No information
+# available' — always attempt an answer", so the two instructions contradicted
+# each other outright.
+#
+# The contradiction was not symmetric across arms, which is why it mattered:
+# neuromorphic.py and neuromorphic_tuned.py carry no refusal clause, so they read
+# the shared tail cleanly while the two baselines read it against a direct
+# opposite. Leaving it would have handicapped precisely the arms NMAFC is
+# measured against, and flattered NMAFC by the same stroke.
 ANSWER_SYSTEM_PROMPT = """You are a conversational AI assistant with retrieval over past conversations.
 Excerpts from the conversation history are provided below, ranked by relevance.
 Answer the user's question based ONLY on information from those excerpts.
-If the answer is not in the excerpts, say "I don't know" or "This information is not available."
 Be concise — answer in a few words or a short phrase when possible.""" + SHORT_ANSWER_RULES
 
 # Sliding window over turns. Overlap keeps a fact and its follow-up in at
@@ -168,7 +178,7 @@ class RagArm(BenchmarkArm):
 
     async def answer_question(self, question: str) -> ArmResponse:
         """Top-k cosine retrieval, then answer. No reranking, no threshold."""
-        start = time.perf_counter()
+        mark = timer_start()
 
         query_vec = await self._embedder.embed_single(question)
         results = self._store.search(query_vec, top_k=self._top_k)
@@ -184,7 +194,7 @@ class RagArm(BenchmarkArm):
             messages=[{"role": "user", "content": question}],
             system_prompt=system,
         )
-        latency_ms = (time.perf_counter() - start) * 1000
+        latency_ms, throttle_ms = timer_split(mark)
 
         prompt_tokens = (len(system) + len(question)) // 4
         completion_tokens = len(response_text) // 4
@@ -192,6 +202,7 @@ class RagArm(BenchmarkArm):
         response = ArmResponse(
             answer=response_text.strip(),
             latency_ms=latency_ms,
+            throttle_ms=throttle_ms,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             context_tokens=context_tokens,
@@ -211,3 +222,15 @@ class RagArm(BenchmarkArm):
             self.metrics.hot_storage_records = self._store.count()
             # RAG keeps no append-only event log; there is nothing to replay.
             self.metrics.cold_storage_events = 0
+
+    def compact_storage(self) -> bool:
+        """Compact the index, so the baseline gets the same maintenance.
+
+        Retrieval never writes here, so there is far less to merge than in the
+        memory arms -- but the store is the same LanceDB, ingestion still writes
+        a version per chunk, and giving one arm a maintenance pass the others do
+        not get would put a thumb on the latency comparison.
+        """
+        if not self._store:
+            return False
+        return self._store.compact()
