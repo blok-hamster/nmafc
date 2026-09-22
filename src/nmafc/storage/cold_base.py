@@ -63,6 +63,9 @@ class ColdStorageBase(ABC):
     def text_for_turns(self, turns: list[int]) -> dict[int, str]:
         return {}
 
+    def all_turn_text(self) -> dict[int, str]:
+        return {}
+
     # Supersession, on the same terms. A backend that does not record it keeps
     # the old behaviour: Hot RAM drops the superseded fact and the archive goes
     # on returning it, so the fact is demoted rather than withdrawn.

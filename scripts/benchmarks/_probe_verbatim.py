@@ -29,8 +29,9 @@ The gap between the first and the second is the ceiling on hydration. The third
 is what a cheap version actually buys, and its measured token cost is reported
 alongside, because an unaffordable ceiling is not a plan.
 
-Retrieval only. No generation, no judging, and the stores are opened with
-reinforcement writes deferred and never flushed, so nothing on disk changes.
+Retrieval only. No generation, no judging, and closed through `close_readonly`,
+so nothing on disk changes. Deferring the reinforcement writes does not achieve
+that on its own -- `close()` commits the buffer.
 
 Usage:
     python -u scripts/benchmarks/_probe_verbatim.py --limit 20
@@ -68,6 +69,7 @@ from nmafc.schemas.memory import DecayConfig  # noqa: E402
 from nmafc.storage.config import NMafcConfig, StorageConfig  # noqa: E402
 from nmafc.wrapper import NeuromorphicMemory  # noqa: E402
 
+from scripts.benchmarks._ab_budget import close_readonly  # noqa: E402
 from scripts.benchmarks.arms.base import build_dated_exchanges  # noqa: E402
 from scripts.benchmarks.datasets.locomo_loader import load_locomo  # noqa: E402
 from scripts.benchmarks._sweep_context_budget import (  # noqa: E402
@@ -260,7 +262,7 @@ async def run(args: argparse.Namespace) -> None:
                         "source": top_sources[:600],
                     })
         finally:
-            memory.close()
+            close_readonly(memory)
 
     if not groups:
         print("nothing measured")

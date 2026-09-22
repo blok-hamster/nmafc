@@ -20,7 +20,8 @@ is measurable today, on the stores as they are, because nothing here needs
 weights to vary -- which is what makes it worth running before committing to the
 re-ingestion that a decay fix would need.
 
-Read-only: reinforcement writes are buffered and never flushed.
+Read-only, via `close_readonly`. Buffering the reinforcement writes does not
+achieve that by itself; the ordinary `close()` commits the buffer.
 
 Usage:
     python scripts/benchmarks/_test_updates.py --questions /c/nmafc_ab/updates_clean.json
@@ -56,6 +57,7 @@ from nmafc.integration.factory import (  # noqa: E402
 from scripts.benchmarks._ab_budget import (  # noqa: E402
     PERMANENT,
     answer,
+    close_readonly,
     open_memory,
     with_retries,
 )
@@ -163,7 +165,7 @@ async def main() -> None:
             ok = sum(d["correct"] for d in got)
             print(f"  {conv:10s} {ok:3d}/{len(got):3d}")
         finally:
-            memory.close() if hasattr(memory, "close") else None
+            close_readonly(memory)
 
     Path(args.out).write_text(json.dumps(rows, indent=2), encoding="utf-8")
 

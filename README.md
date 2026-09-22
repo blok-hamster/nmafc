@@ -4,6 +4,27 @@ A biologically-inspired stateful memory system for LLM agents. NMAFC gives conve
 
 Unlike context-window stuffing or naive vector stores that grow without bound, NMAFC maintains a bounded, high-signal memory that improves with use. Frequently accessed facts become permanent. Contradicted facts are immediately suppressed. Stale information naturally decays away.
 
+## Where it stands
+
+Full LoCoMo, all ten conversations, **paired against a RAG baseline in the same
+window and against the same stores** — one row per question holding both arms'
+answers, so every comparison is a McNemar exact test rather than two run totals
+subtracted:
+
+| | ours | RAG | |
+|---|---|---|---|
+| accuracy, four scored categories (n=1,539) | **71.4%** | 64.6% | **+6.8**, p = 5.5e-08 |
+| **temporal** (n=321) | **71.7%** | 46.1% | **+25.5**, p = 1.1e-14 |
+| **multi-hop** (n=96) | **57.3%** | 44.8% | **+12.5**, p = 0.0075 |
+| rendered context per question | **963 t** | 1,461 t | **−34%** |
+
+Beating a retrieval baseline on accuracy *while spending a third less context* is
+the claim this project exists to make, and temporal and multi-hop are where it
+lands. Single-hop and open-domain are honest ties. Adversarial is a clear loss
+(−14.6) and the section on it explains why it is not fixable from the prompt.
+Full table, every category, and the negative results are in
+[Benchmark Suite](#benchmark-suite).
+
 ## Why NMAFC
 
 | Problem | Current Approaches | NMAFC Solution |
@@ -140,6 +161,64 @@ Started new job at Google (Valid: turn 12 - present)
 ```
 
 This gives the LLM scannable, atomic facts rather than a narrative list. Each fact carries its validity window, helping the model reason about temporal relationships.
+
+### 11. Graded Hydration (source turns beside the facts)
+
+The largest single addition in this branch. A compacted fact is a summary, and a
+summary loses the detail the question wanted often enough to matter — the failure
+analysis found the gold answer *reachable* far more often than it was *answered*.
+Hydration puts the original conversation turns back alongside the facts they were
+extracted from, so the model reads the evidence and not only the gist.
+
+It is graded because turns are expensive. Measured at roughly 55 tokens per
+hydrated turn against 30 per rendered fact, restoring everything blows the
+context budget immediately. So:
+
+| setting | what it controls |
+|---|---|
+| `hydrate_top_k` | how many ranked facts get their source turn pulled back |
+| `hydrate_full_turns` | how many of the best turns are returned **whole** |
+| `hydrate_lines` | for the rest, keep only the N speaker lines that match best |
+| `hydrate_pool` / `hydrate_scan` | choose turns by question match rather than fact rank |
+
+Depth where it pays, a pointer where it does not. `hydrate_pool` exists because
+fact rank is the wrong chooser in one specific case: the turn that answers the
+question can be one whose facts all ranked below the cut, and no increase in
+`hydrate_top_k` reaches it. Selecting from a wider pool by BM25 against the
+question hydrates the same *number* of turns and changes *which* ones.
+
+### 12. The Answer-Type Gate
+
+A question often names the category of its own answer — "in which **state**",
+"what **console**", "how **old**" — and when it does, the retrieved evidence
+usually sits one rung below it. Asked which state a shelter is in, the store held
+"Stamford" and the answer given was "Stamford". That is evidence for the answer,
+not the answer, and it was scored wrong.
+
+This is not a retrieval failure and no amount of extra context fixes it: the
+right fact was already in the window. It is caused by the answering rules, which
+say to reuse the facts' exact wording because a synonym scores as a miss. That
+rule is correct nearly everywhere and exactly wrong here, because "Connecticut"
+is not a synonym for "Stamford" — it is the level the question asked for.
+
+`integration/answer_type.gate(question)` returns a prompt rule plus a tag when,
+and only when, the question names a type. Measured over 1,535 paired questions
+before it existed: on the 238 that name a type we scored 56.7% against RAG's
+61.8%, while on the other 1,297 we scored 66.7% against 64.9%. The entire deficit
+lived in the typed questions.
+
+Deliberately narrow on two counts. **Only when the question names the type** — a
+directive derived from a question that named nothing is a guess, and a guess in
+the prompt is indistinguishable from a hallucination in the answer. **Only a
+level shift, never an invention** — it licenses naming the state a retrieved town
+sits in, not naming a state when nothing retrieved points at one.
+
+It is a regex over a string already in the prompt: no embedding, no model call,
+no store access, so it costs nothing per query and fires on about 15% of them.
+
+The companion `integration/list_shape.wants_list()` has the same form and is
+**deliberately not wired in**; see the negative results in the benchmark section
+for why.
 
 ## Architecture
 
@@ -733,136 +812,190 @@ Applied identically to all arms, so it changes absolute numbers without advantag
 
 ### Current results
 
-**Status: full run.** All 10 LoCoMo conversations, all 1,986 QA pairs, no
-sampling. Answering `azure_v1/DeepSeek-V4-Pro`, embeddings
-`azure_v1/text-embedding-3-small`, judge `azure_v1/Kimi-K2.6`.
-
-Every figure below is regenerable from the committed per-question JSON:
-
-```bash
-python -m scripts.benchmarks._summarise_locomo \
-  --run scripts/benchmarks/results/full_v2 \
-  --baseline scripts/benchmarks/results/locomo_full
-```
+**Status: paired full run, 10 September.** All 10 LoCoMo conversations, 1,985 of
+the 1,986 QA pairs, no sampling. Both arms answered **in the same window against
+the same persisted stores**, one row per question holding both predictions, so
+every comparison below is paired and McNemar exact applies directly to it rather
+than to two runs subtracted from each other. Answering
+`azure_v1/DeepSeek-V4-Pro`, embeddings `azure_v1/text-embedding-3-small`, judge
+`azure_v1/Kimi-K2.6`.
 
 #### Which questions are scored
 
-LoCoMo ships 1,986 QA pairs in five categories. The fifth — `adversarial`, 446
-questions — is **excluded here, as it is in every published comparison** (Mem0,
-Zep, MemMachine and others all report on the remaining 1,540). The category was
-meant to hold unanswerable questions, but the released gold answers are ordinary
-facts: 444 of the 446 carry a real answer rather than "not mentioned", so a
-system that correctly declines is marked wrong. Scoring it measures the grader's
-defect rather than the system's memory.
+LoCoMo ships 1,986 QA pairs in five categories. Published comparisons (Mem0,
+Zep, MemMachine and others) report on 1,540, dropping `adversarial`. That
+category was meant to hold unanswerable questions, but the released gold answers
+are ordinary facts: **444 of the 446 carry a real answer** rather than "not
+mentioned", so a system that correctly declines is marked wrong.
 
-Both denominators are printed throughout, so the exclusion is visible rather
-than quietly applied. Reporting on 1,986 is not more honest — it is a different
-and incomparable number.
+We report **both denominators, and we report adversarial paired against RAG**,
+because dropping a category we lose on is not a measurement decision. The 1,539
+figure is the one comparable to the literature. The 1,985 figure is the one that
+says what the system would do if you pointed it at the whole file.
 
 #### Headline
 
-| arm | 4-cat accuracy | 5-cat | F1 | context tokens |
-|---|---|---|---|---|
-| Raw LLM (full context) | **0.7045** | 0.5670 | 0.4679 | 19,998 |
-| RAG | 0.6026 | 0.4955 | 0.4815 | 1,454 |
-| Neuromorphic (λ=0.05) | 0.5675 | 0.4471 | 0.4348 | 1,236 |
-| **Neuromorphic Tuned (λ=0.005)** | **0.5955** | 0.4698 | 0.4437 | 1,304 |
-
-Against the previous full run, paired over the scored categories:
-
-| arm | before | after | McNemar exact |
-|---|---|---|---|
-| `neuromorphic` | 0.5351 | 0.5675 | +210/−159, **p = 0.0092** |
-| `neuromorphic_tuned` | 0.5435 | 0.5955 | +211/−132, **p = 2.3e-05** |
-
-**Harness validation.** The full-context arm scores 0.7045 where the published
-LoCoMo baselines report ~0.73 for the same condition, and our category counts
-(282 + 321 + 96 + 841) sum to exactly the 1,540 used in those papers. The ruler
-gives close to the same reading as everyone else's, which is the prerequisite
-for any of the comparisons below meaning anything.
-
-#### Per category — where the architecture earns its place, and where it does not
-
-| category | n | Tuned | Raw LLM | RAG | vs full context |
+| set | n | ours | RAG | lead | McNemar exact |
 |---|---|---|---|---|---|
-| **temporal** | 321 | **0.583** | 0.442 | 0.346 | **+14.1** |
-| **multi-hop** | 96 | **0.427** | 0.406 | 0.396 | **+2.1** |
-| single-hop | 282 | 0.486 | 0.599 | 0.418 | −11.3 |
-| open-domain | 841 | 0.656 | 0.874 | 0.786 | −21.8 |
+| **scored four categories** | 1,539 | **71.4%** | 64.6% | **+6.8** | +238/−133, **p = 5.5e-08** |
+| adversarial | 446 | 35.9% | 50.4% | −14.6 | +38/−103, p = 4.1e-08 |
+| all five | 1,985 | 63.4% | 61.4% | +2.0 | +276/−236, p = 0.085 |
 
-The temporal result is the one worth taking seriously: **on "when did X happen"
-questions the memory system beats full-context stuffing by 14 points while using
-15× less context**, and beats RAG by 24. That is the category a structured
-memory ought to win, and it is the only place any arm beats the full-context
-ceiling. Multi-hop edges ahead of both baselines too, though n=96 is small and
-the margin is not significant on its own.
+| | ours | RAG | |
+|---|---|---|---|
+| rendered context, mean | **963 t** | 1,461 t | **−34%** |
 
-The deficit is concentrated almost entirely in **open-domain, which is 55% of
-the scored set**. Closing that one category to RAG's level would put the overall
-figure at ~0.667, above RAG. The headline is not lost across the board; it is
-lost in one place.
+The context figure is the one that constrains everything else. The design target
+was to beat RAG **at or under ~1,000 rendered tokens**, and the shipped
+configuration sits at 963. Several changes below buy accuracy and are not
+shipped for exactly this reason.
+
+#### Per category
+
+| category | n | ours | RAG | lead | McNemar exact | ours tok | RAG tok |
+|---|---|---|---|---|---|---|---|
+| **temporal** | 321 | **71.7%** | 46.1% | **+25.5** | +101/−19, **p = 1.1e-14** | 943 | 1,422 |
+| **multi-hop** | 96 | **57.3%** | 44.8% | **+12.5** | +15/−3, **p = 0.0075** | 961 | 1,410 |
+| single-hop | 281 | 50.9% | 45.6% | +5.3 | +51/−36, p = 0.133 | 980 | 1,486 |
+| open-domain | 841 | 79.8% | 80.3% | −0.5 | +71/−75, p = 0.804 | 967 | 1,461 |
+| adversarial | 446 | 35.9% | 50.4% | −14.6 | +38/−103, p = 4.1e-08 | 960 | 1,486 |
+
+**What is defensible from this table:** temporal, multi-hop, and the context
+saving. Temporal is the largest effect in the run and the one a structured
+memory ought to win — "when did X happen" needs dated events, and dated events
+are what the extractor produces. Multi-hop is significant despite n=96.
+
+**What is not:** single-hop and open-domain are ties. The +5.3 on single-hop
+looks like a win and is not one at p=0.133; the −0.5 on open-domain looks like a
+loss and is not one either. Neither should be quoted as a result. **The overall
++2.0 across all five categories is p=0.085 and is not significant** — the honest
+headline is the scored-set +6.8 plus the 34% context saving, not the all-five
+number.
+
+Detectable effect sizes, so the ties above can be read for what they are: at 40
+discordant pairs this design can see 1.7 points, at 150 it can see 3.1. The
+single-hop and open-domain gaps are inside that band.
+
+#### Where the loss is: adversarial, and it is not recoverable from the prompt
+
+Adversarial is the one clear loss, and it is large enough to erase most of the
+scored-set lead when the categories are pooled. The obvious theory is that we
+refuse too much. Measured, that theory does not hold: **RAG refuses on
+adversarial at a rate between comparable to ours and higher than ours** —
+different refusal detectors disagree on the exact rate, which is itself a
+warning about quoting one — **and still scores 14.5 points above us**. Roughly a
+third of the gap is recoverable refusal; the rest is wrong answers on questions
+we committed to, which no prompt instruction reaches.
+
+Two prompt clauses were built and measured against this over the full 1,984, and
+both are dead:
+
+| clause | adversarial | temporal | all five |
+|---|---|---|---|
+| `commit_short` | **+5.4**, p = 0.0022 | **−4.0**, p = 0.0024 | +0.0, +72/−72 |
+| `commit_exact` | +0.2 | **−3.4**, p = 0.0074 | worse than both |
+
+`commit_short` buys adversarial and pays for it exactly, one for one, out of
+temporal and multi-hop. `commit_exact` was an attempt to keep the gain without
+the damage by removing the offending wording; it removed the gain instead and
+kept the damage. Neither ships. The behaviour that answers an adversarial
+question and the behaviour that dates a temporal one are welded together in this
+model, and the join is not in the prompt.
+
+#### Latency, and why the mean is the wrong statistic
+
+Earlier revisions of this file compared latency across two runs on two different
+nights against a shared provider quota, and got a nonsense answer out of it —
+two runs of the *identical* RAG arm once came out 91% apart. The paired run
+measures both arms interleaved in one window:
+
+| | p50 | p75 | p90 | p99 | mean |
+|---|---|---|---|---|---|
+| ours | 1,741 ms | 2,407 ms | 3,559 ms | 26,100 ms | 2,721 ms |
+| RAG | 1,769 ms | 2,398 ms | 3,346 ms | 12,019 ms | 2,295 ms |
+
+**The two arms are indistinguishable through p90.** We are marginally faster at
+the median and marginally slower at p90; neither gap is a result. The 19% gap in
+the mean lives entirely in the tail, and both arms top out at ~93.8 s, which is a
+provider retry ladder rather than anything either architecture computes.
+
+An earlier revision of this section claimed the memory arm was "roughly 6× slower
+for 1 point less accuracy", derived from exactly this mean on two unpaired runs.
+That was wrong and has been removed. **Quote the median, and do not read a
+latency delta out of a run whose arms were not interleaved.**
+
+#### Negative results, kept because they cost real money to learn
+
+Everything in this section was built, wired end to end, measured on a large
+paired sample, and then not shipped. They are recorded here so nobody pays for
+them twice.
+
+**Width on open-domain: real, and still not shippable.** Open-domain is the
+category where we merely tie, so it got the most attention. Three arms, one
+window, 830 paired questions:
+
+| arm | accuracy | tokens | vs shipped | vs RAG |
+|---|---|---|---|---|
+| wide (hydrate 10, grounding 0.003) | 81.3% | 1,300 t | +1.6, +35/−22, p = 0.111 | +1.2, p = 0.426 |
+| grounding only (0.003) | 80.6% | 1,047 t | +0.8, +31/−24, p = 0.419 | +0.5, p = 0.797 |
+| shipped | 79.8% | 968 t | baseline | −0.4, p = 0.867 |
+| RAG | 80.1% | 1,464 t | | |
+
+Two findings. Splitting the knobs shows **facts are about twice as
+token-efficient as hydrated turns** — grounding alone gets half the gain for a
+sixth of the token cost. And neither arm is significant. But the reason neither
+ships is simpler than significance: **applying width to open-domain only
+requires knowing the category, and the category is not knowable at inference
+time.** It is a label in the benchmark file, not a property of the question. A
+policy built on it is a benchmark artefact, not a system.
+
+**The list gate: a real signal, and width is not the answer to it.**
+`integration/list_shape.py` detects, from the question string alone, whether it
+asks to enumerate ("What activities does Melanie partake in") rather than to
+name one thing. Unlike a category, this **is** knowable at inference. It fires
+on 327 of 1,985 questions, and the shape it finds is real: we score **50.2% on
+the questions it fires on against 66.0% on the ones it does not**.
+
+Handing those questions more context does not close it. Every firing question
+answered both ways, 322 of them: wide 50.9% against the shipped 49.4%, +17/−12,
+**p = 0.458**, for 324 extra tokens each. Single-hop, the category the gate was
+built from, goes *backwards* at −1.4. The module is kept, tested and documented
+because the detection is sound and the gap is worth attacking; it is wired into
+no shipping path.
+
+**Sample size is the recurring lesson.** An earlier read of that same gate, on
+108 questions, said +5.6 and looked like the best result of the cycle. It was
+nine coin flips landing the same way. Four separate changes in this project have
+been mispriced by a small sample — a 6-question token estimate that came in 292 t
+high, an 8-question clause read, the +5.6 above, and a 281-question precision
+screen that could not see the miss it caused. **Nothing under roughly 800
+questions is believed here**, and the harness is built to run paired arms at full
+scale for that reason.
 
 #### Why answers are wrong: refusal, not just retrieval
 
 `_diagnose_retrieval.py` replays retrieval against the persisted stores and
 checks whether the gold answer was in the context the model actually received —
-no regeneration, no judging, one embedding call per question. Of the 623 wrong
-answers on the scored categories:
+no regeneration, no judging, one embedding call per question. It was run against
+an earlier configuration, and the diagnosis is what produced the answer prompt
+described above. Of the wrong answers on the scored categories at that time,
+**more than half were the system declining to answer**, and in 30% of all wrong
+answers it declined with the correct fact in front of it.
 
-| | count | share |
-|---|---|---|
-| gold answer **present** in context, still answered wrong | 356 | 57.1% |
-| gold answer absent from context | 267 | 42.9% |
-| model abstained ("I don't know") | 337 | 54.1% |
-| **abstained while holding the answer** | **190** | **30.5%** |
+The absolute rates there are superseded by the run above and are not repeated.
+What survives is the method and two consequences that still hold:
 
-**More than half of all wrong answers are the system declining to answer**, and
-in 190 cases it declined with the correct fact in front of it. Abstention rate
-by category: multi-hop 51.0%, temporal 25.5%, open-domain 19.9%, single-hop
-15.2%. On the excluded adversarial set it reaches 95.8%.
-
-Two consequences:
-
-- The largest single lever is the **answer prompt**, not retrieval. It is also
-  the cheapest to test, because the persisted stores make retrieval-phase
+- The **answer prompt is a first-class lever**, not a detail, and it is the
+  cheapest one to test because the persisted stores make retrieval-phase
   experiments nearly free.
-- **Spreading Activation cannot currently be evaluated at all.** Half of every
-  multi-hop question ends in a refusal, so whatever the graph retrieves is being
-  discarded before it reaches an answer. The flat multi-hop result reported
-  below is evidence about the answering step, not about the graph.
+- Refusal analysis has to precede retrieval analysis. A category can look like a
+  retrieval failure while being an answering failure, and the fix for one does
+  nothing for the other. Multi-hop was exactly this: it looked flat because half
+  of it ended in a refusal before the graph's output ever reached an answer.
 
-Read with these caveats, all of which are load-bearing:
-
-- `max_hops=2` was developed against conv-26 and conv-30. Those two are included
-  in this run, so some of the gain may still be fitting to them.
-- The previous run had `max_hops=0` **and** an extractor prompt with no
-  graph-linking instructions at all (see `integration/extractor.py`). The
-  before/after comparison therefore moves two things at once and cannot be used
-  to attribute the gain to graph traversal specifically.
-- Do not quote a latency improvement against the previous release. Both runs
-  were rate-limited; most of any gap is queueing, not code. The number that does
-  stand is the comparison against our own RAG arm: 21.3 s per answer against
-  3.6 s, roughly 6× slower for 1 point less accuracy.
-- An earlier revision of this section claimed the system "confabulates rather
-  than declining to answer" on adversarial. That was **backwards** — it abstains
-  on 95.8% of them. The correction is what produced the refusal analysis above.
-
-#### Pilot results: prompt + retrieval improvements (conv-26, 199 questions)
-
-The retrieval pipeline and answer prompt improvements were developed against a
-single-conversation pilot (conv-26, Bedrock Claude Haiku 4.5, Ollama nomic-embed-text).
-These numbers are directional — small sample, different model from the full run:
-
-| iteration | overall F1 | temporal | single-hop | multi-hop | open-domain | adversarial |
-|---|---|---|---|---|---|---|
-| Baseline (old prompt) | 0.296 | 0.515 | 0.233 | 0.130 | 0.399 | 0.061 |
-| v4 (fill-in-the-blank + few-shot) | **0.378** | **0.585** | **0.369** | **0.234** | **0.449** | **0.156** |
-| **Δ** | **+27.6%** | +13.7% | +58.7% | +80.3% | +12.5% | +155% |
-
-The largest gains are in single-hop (+58.7%) and multi-hop (+80.3%), both
-dominated by the refusal fix: the model was declining to answer questions whose
-facts were present in the retrieved context. The fill-in-the-blank framing and
-anti-refusal instruction address this directly.
+An earlier revision of this section claimed the system "confabulates rather than
+declining to answer" on adversarial. That was **backwards**, and correcting it is
+what produced the refusal analysis in the first place.
 
 ### Datasets
 
@@ -967,6 +1100,22 @@ Several details materially affect whether the numbers mean anything:
 - **Every arm gets the same answer-format rules.** LoCoMo gold answers are 1–4
   words, so a verbose but correct reply scores near-zero F1. `SHORT_ANSWER_RULES`
   in `arms/base.py` is appended to every arm's answer prompt.
+- **Arms are run paired, in one window, against the same stores.** The harness in
+  `_ab_budget.py` writes one row per question holding *both* arms' predictions,
+  rather than running two arms separately and subtracting the totals. This is
+  what makes McNemar exact applicable, and it removes drift between runs from the
+  comparison entirely. Our own arm re-run against its saved output moves 0.1
+  points at n=841 (+21/−22), so anything the paired design reports at that scale
+  is signal rather than run-to-run wobble.
+- **Reading the store must not write to it.** Retrieval reinforces what it
+  returns, so an analysis pass that simply reads back a store changes it. Any
+  read-only script calls `close_readonly()`, which drops pending reinforcements
+  before closing. Without this, the persisted `k` and `last_reinforced_turn`
+  values describe how many times the benchmark ran, not how the framework
+  behaves.
+- **Nothing mutates a store in place.** Every experiment that changes state
+  copies the store first. The ten indexed LoCoMo stores are expensive enough to
+  rebuild (~5 hours of paid ingestion) that they are treated as immutable inputs.
 
 ### Memory Classification Prompt
 
@@ -1018,18 +1167,23 @@ determinism.
 
 #### Committed benchmark data
 
-Per-question results for the two runs the README cites are in the repository, so
-the tables can be recomputed rather than taken on trust:
+Per-question results for the runs the README cites are in the repository, so the
+tables can be recomputed rather than taken on trust:
 
 | path | contents |
 |---|---|
-| `results/full_v2/results.json` | current run — both memory arms, 1,986 rows each |
+| `results/paired_2026_09_10/` | **the current run.** Both arms on the same row, 1,985 questions, plus the seven A/B arms |
+| `results/paired_2026_09_10/summarise.py` | regenerates every table in the results section above. Standard library only, no API calls |
+| `results/full_v2/results.json` | the earlier unpaired run — both memory arms, 1,986 rows each |
 | `results/full_v2/checkpoint_*.json` | same rows grouped by conversation, as written during the run |
-| `results/full_v2.log` | the run's console log, including the four network blips it recovered from |
-| `results/locomo_full/` | the earlier baseline run — all four arms |
+| `results/full_v2.log` | that run's console log, including the four network blips it recovered from |
+| `results/locomo_full/` | the original baseline run — all four arms |
 
 Each row carries the question, category, gold answer, prediction, judge verdict,
-F1, context tokens and latency.
+context characters and latency. The paired files additionally carry the *other*
+arm's prediction on the same row, which is the entire point of them — see
+`results/paired_2026_09_10/README.md` for the column layout and the one join
+trap the column names invite.
 
 What is **not** committed is the persisted memory stores each run leaves behind:
 4.1 GB across 222,485 files for ten conversations. They stay local (see
@@ -1047,6 +1201,16 @@ except where noted:
 | `_summarise_locomo.py` | what are the numbers, on both denominators | none |
 | `_diagnose_retrieval.py` | is a wrong answer a ranking failure or a refusal | 1 embedding/question |
 | `_analyse_beta_survivors.py` | which facts did clustering protection actually save | none |
+| `_screen_*.py`, `_sweep_*.py` | does a retrieval setting change whether the gold answer is *reachable* | 1 embedding/question |
+| `_probe_stored_vs_reached.py` | is the fact missing from the store, or present and unranked | none |
+
+The `_screen_` and `_sweep_` family is the reason this project could test as many
+configurations as it did. Retrieval is deterministic given a store, so a setting
+can be scored on reachability without generating a single answer: about four
+minutes per configuration against roughly an hour and a half of paid generation.
+Screening is not a substitute for the real thing — reachable is not answered —
+but it eliminates the settings that cannot possibly help before any money is
+spent.
 
 ### Reliability & Throughput
 
@@ -1117,76 +1281,45 @@ LoCoMo exchanges through the full pipeline:
 | Records with ≥1 link | 0% (0 of 675) | **95%** |
 | Dangling pointers | — | **0%** |
 
-#### …and turning it on is the single largest measured gain. Superseded finding.
+#### …and traversal is worth having, after two wrong readings of it
 
-> **Superseded 2026-08-18.** The A/B below is retained because its mechanics are
-> sound and its fan-out numbers still hold, but its conclusion was wrong, and
-> wrong in an instructive way. It measured 13 multi-hop questions on one
-> conversation and concluded traversal does not help. Across all 303 questions of
-> conv-26 and conv-30 it is the **only** change since the last release that
-> improved anything: `max_hops` 0 → 2 moves `neuromorphic_tuned` from 0.472 to
-> 0.525 judge accuracy (+32 questions, −16, McNemar exact **p = 0.029**), and the
-> gain is broad rather than concentrated in multi-hop:
->
-> | category | n | `max_hops=0` | `max_hops=2` | Δ |
-> |---|---|---|---|---|
-> | single-hop | 43 | 0.465 | 0.628 | **+0.163** |
-> | multi-hop | 13 | 0.308 | 0.385 | +0.077 |
-> | open-domain | 113 | 0.602 | 0.655 | +0.053 |
-> | temporal | 63 | 0.698 | 0.746 | +0.048 |
-> | adversarial | 71 | 0.099 | 0.085 | −0.014 |
->
-> The lesson is about the measurement, not the mechanism. Multi-hop is 13 of 303
-> questions here; scoping the A/B to the category the feature was *designed* for
-> sampled the smallest stratum in the set and missed that traversal's real
-> benefit lands on **single-hop** — where the neighbour of a matched fact turns
-> out to be the specific detail the question wanted. A feature evaluated only on
-> the questions its designer expected it to serve is not evaluated.
->
-> The context cost below is real and unchanged: 461 → 1,571 tokens. The
-> efficiency claim survives it — at 1,571 tokens the arm still uses **9× less
-> context than the raw-LLM baseline** (14,326) while scoring within 2 points of
-> it, and beats RAG (0.472 at 1,521 tokens) at parity of budget.
+This feature was measured three times and the first two readings were both
+wrong. The sequence is worth keeping because the errors are the ordinary ones.
 
-Enabling the graph was expected to move multi-hop, the category it exists to
-serve. It does not. A paired A/B on conv-26 — ingested once, store copied, the
-same 13 multi-hop questions answered against each copy with only `max_hops`
-differing — gives:
+**Reading one (wrong): "traversal does not help."** A paired A/B on conv-26,
+store copied, only `max_hops` differing, gave 6/13 with the graph on against
+7/13 with it off, and 11 of the 13 answers byte-identical despite ~1,100 extra
+tokens. n=13, on the single conversation the feature was developed against.
+Scoping the test to the category the feature was *designed* for sampled the
+smallest stratum in the whole benchmark.
 
-| | graph off (`max_hops=0`) | graph on (`max_hops=2`) |
-|---|---|---|
-| Mean F1 | 0.242 | **0.203** (−0.039) |
-| Judge accuracy | 7/13 | **6/13** |
-| Context tokens | 457 | **1,585** (3.5×) |
-| Per-question | — | helped 0, hurt 2, **unchanged 11** |
+**Reading two (wrong in the other direction): "largest gain in the project."**
+Widened to all 303 questions of conv-26 and conv-30, `max_hops` 0 → 2 moved
+accuracy 0.472 → 0.525, +32/−16, p = 0.029, with the gain landing mostly on
+**single-hop** rather than multi-hop. True of those two conversations. They are
+also the two the retrieval settings were tuned on, so it was partly reading its
+own tuning back.
 
-Eleven of thirteen answers were byte-identical despite ~1,100 extra tokens of
-retrieved context. The traversal is not surfacing facts the answer needed; it is
-surfacing facts the model then ignores. The two that changed both got worse.
+**Reading three (the one that stands).** In the full paired run, multi-hop
+scores **57.3% against RAG's 44.8%, +15/−3, p = 0.0075**, at 961 rendered
+tokens. Traversal earns its place, and it does so without the fan-out blowup
+that made the earlier readings alarming.
 
-Fan-out is why, and it scales far worse than a small store suggests. On a
-48-record store 2-hop traversal returned 18.1 records; on a realistic 403-record
-store it returns 34.8:
+The fan-out concern was real when it was raised and is now bounded. Unrestricted
+2-hop BFS over a store where 95% of records carry links returned 34.8 records
+and 1,585 tokens — **more context than the RAG baseline it is supposed to
+beat**. The shipped path does not do that: expansion is score-ranked and capped,
+and the whole retrieval budget is reranked down before rendering, which is why
+the measured multi-hop context is 961 tokens rather than 1,585.
 
-| `max_hops` | 0 | 1 | 2 |
-|---|---|---|---|
-| Records retrieved | 10.0 | 22.2 | **34.8** |
-| Context tokens | 457 | 1,022 | **1,585** |
+Two general lessons, both of which cost money to learn:
 
-That last figure is the important one: **at `max_hops=2` the memory arm consumes
-more context than the RAG baseline it is supposed to beat** (1,497 tokens). The
-efficiency result and the graph cannot both stand as currently implemented.
-
-Two cautions on reading this. n=13 on one conversation — conv-30 contains no
-multi-hop questions at all — so it is directional, not conclusive; the full run
-has 96 multi-hop questions across ten conversations. And the apparent latency
-difference (4,700 ms off vs 1,939 ms on) is an artifact of run order: the
-graph-off condition ran first and paid embedding cold-start and LanceDB warmup.
-It is not evidence that traversal is free.
-
-The mechanism is not necessarily wrong — unbounded BFS over a store where 95% of
-records carry links is. A score-ranked expansion with a hard cap on added records
-would test the idea without the fan-out, and has not been tried.
+- **A feature evaluated only on the questions its designer expected it to serve
+  is not evaluated.** Traversal's largest benefit was on single-hop, where the
+  neighbour of a matched fact turns out to be the detail the question wanted.
+- **Do not read a latency delta out of a run whose arms were not interleaved.**
+  The apparent 4,700 ms vs 1,939 ms gap here was run order: the first condition
+  paid embedding cold-start and LanceDB warmup.
 
 #### The Cold ROM fallback was unreachable, and discarded
 
@@ -1229,43 +1362,38 @@ of 15 real questions, identical to disabling it outright.
 Reproduce either measurement with `scripts/benchmarks/_measure_theta.py` and
 `scripts/benchmarks/_verify_graph_links.py`.
 
-#### The Cold ROM fallback is reachable and still never fires
+#### …then the gate was removed entirely, which is what shipped
 
-Fixing the threshold made the fallback *possible*. Measuring it showed it is
-still, in practice, dead code. Across all 304 LoCoMo questions on real ingested
-stores at `theta = 0.45`, the archive was consulted **5 times (1.6%)**. Hot RAM's
-best-hit cosine has a floor of 0.376 and a median near 0.70, so it clears 0.45 on
-299 of 304 questions.
+**Superseded.** The two sections above describe a fallback *gated* on `theta`.
+The shipped system has no such gate. `always_search_cold` defaults to `true` and
+Cold ROM is searched **in parallel with Hot on every query**, with the two result
+sets merged and reranked together. `theta` still exists in config and no longer
+decides anything on the default path.
 
-| `theta` | 0.45 | 0.55 | 0.65 | 0.70 |
-|---|---|---|---|---|
-| Fallback firing rate | **1.6%** | 10% | 32% | 50% |
+The reasoning is in the numbers those sections produced. Gated on `theta = 0.45`
+the archive was consulted on 1.6% of questions, which made every Cold ROM
+feature — dense archive search, archive graph expansion, the distance-metric fix
+itself — untested by every benchmark in the repository. And the archive is not
+redundant: measured across eight fully ingested stores it holds **78–127
+entities (11–16%) that Hot RAM has already pruned**, and every archive-only
+record sampled was `ActiveContext`, the tier that decays. They are exactly the
+dated specifics LoCoMo asks about (`james_current_game_witcher_3`,
+`james_cooking_class_cost`).
 
-This matters more than a tuning note, because it invalidates attribution rather
-than accuracy: **every Cold ROM feature is untested by every benchmark run in
-this repository.** Dense archive search, archive graph expansion and the
-threshold fix itself have never executed on more than five questions. None can
-be credited or blamed for any score reported here.
+The gate itself was the defect, and not because it was mistuned. `theta`
+compares a **topic** similarity and infers answer presence from it. Working
+memory answers "do we hold anything about gaming?" with a confident 0.75 while
+the fact the question actually needs sits unread in the archive. No threshold
+value fixes that, because the quantity being thresholded is the wrong quantity.
+Opening the door unconditionally and letting the reranker decide is cheaper than
+a gate that tests answer presence properly, which would cost a model call per
+question.
 
-The archive is not, however, redundant. Measured directly across eight fully
-ingested stores, it holds facts that Hot RAM has already pruned:
-
-| | archive entities | Hot RAM entities | archive-only |
-|---|---|---|---|
-| typical store | 622–802 | 523–675 | **78–127 (11–16%)** |
-
-Every archive-only record sampled was `ActiveContext` — the tier that decays —
-and they are exactly the dated specifics LoCoMo asks about
-(`james_current_game_witcher_3`, `james_cooking_class_cost`). Roughly one fact in
-eight lives only in the archive, and the door stays shut on it.
-
-The gate is the defect. `theta` compares a **topic** similarity against a
-threshold and infers answer presence from it. Working memory answers "do we hold
-anything about gaming?" with a confident 0.75 via `james_current_gaming_momentum`
-while the fact the question needs sits unread in the archive. A gate that tested
-answer presence rather than topic overlap would open the door on the questions
-that need it; that change is not implemented, and it costs one extra model call
-per question.
+One counter-intuitive consequence, measured: **widening the Cold budget hurts.**
+Once the archive is searched on every query, giving it more slots displaces Hot
+RAM hits that were already right. The lever that matters on the merged path is
+`rerank_top_k`; `rrf_k`, `max_hops` and the decay weight all screened as no
+better than the default.
 
 #### Three ablations, three negative results
 
@@ -1305,6 +1433,38 @@ None of these are arguments that the mechanisms are wrong in principle. They are
 arguments that on retrospective-QA benchmarks, where every question is asked
 after the conversation ends and nothing is ever re-retrieved mid-conversation,
 forgetting has no upside to trade against its cost.
+
+All three were measured on 303 questions of two conversations. Read them as
+directional. The full paired run is the only measurement in this file large
+enough to settle a small effect.
+
+#### Screening retrieval settings without paying for generation
+
+Most configuration questions do not need answers generated at all. Retrieval is
+deterministic given a store, so a config can be scored on **whether the gold
+answer reached the context** rather than on whether the model then said it. That
+turns a config sweep from roughly an hour and a half of paid generation into
+about four minutes of embedding calls, which is why the settings below could be
+swept at full scale instead of sampled.
+
+What the sweep found is mostly that there is nothing to find. `rerank_top_k` is
+the only setting that moves reachability. `rrf_k`, `max_hops` beyond the default,
+and the decay-weighted retrieval score all come back flat or negative.
+
+**Weighting retrieval by decay state is the clearest negative.** The idea is
+natural — a memory the system has reinforced should rank above one it has nearly
+forgotten — and the switch had in fact never been on in any reported run. Turning
+it on **costs about 5 points of reachability in every category**, with no
+category spared. Recency of reinforcement is not evidence of relevance to the
+question being asked, and on a retrospective benchmark it is close to
+anti-correlated with it.
+
+A caution that applies to every number in this section: **reading the store
+mutates it.** Retrieval reinforces what it returns, so a single benchmark
+question rewrites on the order of a dozen records. Stored reinforcement counts
+and `last_reinforced_turn` values therefore measure the benchmark, not the
+framework, and any read-only analysis has to disable the writeback first — see
+`close_readonly` in `scripts/benchmarks/_ab_budget.py`.
 
 #### Judge independence
 
@@ -1564,25 +1724,35 @@ nmafc/
 │   ├── cli.py                     # Unified CLI (nmafc start/init/chat)
 │   ├── schemas/
 │   │   ├── memory.py              # Pydantic models (MemoryRecord, DecayConfig, etc.)
-│   │   └── events.py              # EventType enum + MemoryEvent model
+│   │   ├── events.py              # EventType enum + MemoryEvent model
+│   │   └── code.py                # Symbol/file records for the code-memory path
 │   ├── py.typed                   # PEP 561 marker for IDE type resolution
 │   ├── engine/
 │   │   ├── decay.py               # Ebbinghaus exponential decay
 │   │   ├── reinforcement.py       # LTP (weight reset + k increment)
 │   │   ├── pruning.py             # Override detection + temporal invalidation
 │   │   ├── reranking.py           # Reciprocal Rank Fusion (RRF) reranker
+│   │   ├── linking.py             # Resolve extracted links onto entities that exist
 │   │   ├── consolidation.py       # REM sleep (elevation + cleanup)
 │   │   └── rollback.py            # State reconstruction from Cold ROM
 │   ├── integration/
 │   │   ├── factory.py             # Provider factory (provider/model strings)
 │   │   ├── base.py                # Abstract LLMProvider + EmbeddingProvider
 │   │   ├── extractor.py           # StateExtractor (tool-use based extraction)
-│   │   ├── query_router.py        # Unified parallel search + RRF reranking
+│   │   ├── query_router.py        # Unified parallel search, RRF rerank, hydration
+│   │   ├── answer_type.py         # Question -> answer-shape prompt rule (SHIPPED)
+│   │   ├── grounding.py           # Rank facts by evidence, not by the summary
+│   │   ├── quantities.py          # Numbers as content, not as short stopwords
+│   │   ├── list_shape.py          # "Does this ask for a list?" (measured, NOT wired)
 │   │   ├── openai_provider.py     # OpenAI / OpenAI-compatible
 │   │   ├── anthropic_provider.py  # Anthropic native
 │   │   ├── bedrock_provider.py    # AWS Bedrock (boto3 + Anthropic SDK)
 │   │   ├── azure_provider.py      # Azure OpenAI
 │   │   └── fastembed_provider.py  # ONNX CPU embeddings
+│   ├── code/                      # Code memory: exact symbols, no embeddings
+│   │   ├── symbols.py             # Python `ast` -> definitions + references
+│   │   ├── index.py               # Symbol graph: defined, referred to, changed
+│   │   └── render.py              # Graded hydration under a hard token budget
 │   ├── storage/
 │   │   ├── config.py              # NMafcConfig + TOML parsing
 │   │   ├── hot.py                 # HotStorage (LanceDB, supports S3)
@@ -1638,9 +1808,15 @@ nmafc/
 │   ├── evaluation/                # F1 + LLM-as-judge metrics
 │   ├── resilience.py              # Rate limiter + retry/backoff wrappers
 │   ├── live_progress.py           # Appends progress lines during long runs
+│   ├── ingest_checkpoint.py       # Resume ingestion without re-paying for it
 │   ├── run_locomo.py              # LoCoMo CLI runner (parallel + checkpointed)
 │   ├── run_longmemeval.py         # LongMemEval CLI runner
-│   └── visualize.py               # Publication-ready Plotly charts
+│   ├── visualize.py               # Publication-ready Plotly charts
+│   ├── _ab_budget.py              # Paired-arm harness: same window, same stores
+│   ├── _run_open_domain_full.py   # Full-scale paired runner with gate filters
+│   ├── _ab_*.py                   # Paired A/Bs, one per hypothesis
+│   ├── _screen_*.py / _sweep_*.py # Retrieval-only screens (no generation, no cost)
+│   └── _diagnose_*.py / _probe_*.py  # Failure analysis against persisted stores
 ├── tests/                         # pytest suite (unit + integration)
 ├── .env.example                   # All provider credential variables
 └── pyproject.toml                 # Package metadata + dependencies

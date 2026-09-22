@@ -48,6 +48,14 @@ class ColdStorage(ColdStorageBase):
         # over an in-memory matrix is both exact and fast enough that an index
         # would add a dependency and an approximation for no measurable gain.
         self._vector_cache: tuple[list[int], Any] | None = None
+        # Every turn's wording for this tenant, read whole and dropped on every
+        # write. `text_for_turns` answers from the primary key and is the right
+        # call when the turns wanted are known; this one exists for the caller
+        # that has to score all of them to find out which it wants, and reading
+        # a few hundred short rows per query is worth avoiding once a handle
+        # asks for it repeatedly.
+        self._turn_text_cache: dict[int, str] | None = None
+        self._turn_vector_cache: dict[int, list[float]] | None = None
 
     def _create_tables(self) -> None:
         self._conn.executescript("""
@@ -117,6 +125,25 @@ class ColdStorage(ColdStorageBase):
                 conversation_id TEXT NOT NULL DEFAULT 'default',
                 turn INTEGER NOT NULL,
                 text TEXT NOT NULL,
+                PRIMARY KEY (agent_id, conversation_id, turn)
+            );
+
+            -- An optional index over the turns above, and only over the turns:
+            -- these vectors are never searched to answer a query, only to order
+            -- turns competing for a hydration slot a fact has already won. The
+            -- objection the comment above raises against indexing turn text is
+            -- that it would put raw turns into the retrieval budget, and this
+            -- does not, for the same reason `all_turn_text` does not.
+            --
+            -- Separate from the turn text rather than a column on it because it
+            -- is written by a separate pass and a store is perfectly usable
+            -- without it. Empty means rank turns by words, which is the
+            -- behaviour every store had before this existed.
+            CREATE TABLE IF NOT EXISTS turn_vectors (
+                agent_id TEXT NOT NULL DEFAULT 'default',
+                conversation_id TEXT NOT NULL DEFAULT 'default',
+                turn INTEGER NOT NULL,
+                vector TEXT NOT NULL,
                 PRIMARY KEY (agent_id, conversation_id, turn)
             );
 
@@ -222,6 +249,89 @@ class ColdStorage(ColdStorageBase):
             (self._agent_id, self._conversation_id, turn, text),
         )
         self._conn.commit()
+        self._turn_text_cache = None
+        # A vector describes the wording it was built from, so rewriting a turn
+        # invalidates its vector as surely as its text. Dropping the whole cache
+        # is heavier than it needs to be and is the only version that cannot
+        # leave a vector pointing at wording that no longer exists.
+        self._turn_vector_cache = None
+
+    def store_turn_vector(self, turn: int, vector: list[float]) -> None:
+        """Index one turn for hydration ranking. Written by a separate pass.
+
+        Not called during ingestion. Embedding every turn is a cost a store
+        should be able to decline, and a store without this is not degraded --
+        it ranks turns for hydration by words, which is what every store did
+        before the table existed.
+        """
+        self._conn.execute(
+            """INSERT INTO turn_vectors (agent_id, conversation_id, turn, vector)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(agent_id, conversation_id, turn)
+               DO UPDATE SET vector = excluded.vector""",
+            (self._agent_id, self._conversation_id, turn, json.dumps(vector)),
+        )
+        self._conn.commit()
+        self._turn_vector_cache = None
+
+    def all_turn_text(self) -> dict[int, str]:
+        """Every turn this tenant has, as turn -> text.
+
+        The schema comment above says turn text is "reachable only through a
+        fact that already won a slot", and that was the whole design: turns are
+        evidence, facts are what competes. This method does not change that. It
+        exists so a caller can rank turns *for hydration*, a budget that is
+        fixed at `hydrate_top_k` and separate from the retrieval budget, so a
+        turn read here still never takes a slot from a fact.
+
+        What it does change is the reachability of a turn whose facts all ranked
+        below the cut. Under `text_for_turns` such a turn cannot be hydrated
+        however well it answers the question, because nothing nominates it.
+
+        Cached and dropped on write. A conversation is a few hundred turns of a
+        few hundred characters, so this is a small read; it is cached because
+        the caller runs it per query and the answer only changes on ingestion.
+        """
+        if self._turn_text_cache is None:
+            rows = self._conn.execute(
+                "SELECT turn, text FROM turn_text "
+                "WHERE agent_id = ? AND conversation_id = ?",
+                (self._agent_id, self._conversation_id),
+            ).fetchall()
+            self._turn_text_cache = {row["turn"]: row["text"] for row in rows}
+        return self._turn_text_cache
+
+    def all_turn_vectors(self) -> dict[int, list[float]]:
+        """Every turn this tenant has embedded, as turn -> vector.
+
+        Empty for a store built before the index existed or never indexed, and
+        the caller treats empty as "rank turns by words alone", so this is
+        additive to every store already on disk.
+
+        The index is why it is worth having. Ranking turns for hydration by BM25
+        finds a turn that repeats the question's rare word and misses a turn that
+        answers it in different words entirely. Measured on the 106 open-domain
+        losses whose answer is in a turn: asked how John feels while surfing, the
+        turn saying "super exciting and free-feeling" is 834th by word overlap
+        and 5th by meaning. Inside the eight turns the scan actually takes, words
+        find the answering turn half the time and meaning finds it 65% of the
+        time.
+
+        Cached like the text, and dropped on the same write, because both are
+        answers that only change on ingestion.
+        """
+        if self._turn_vector_cache is None:
+            try:
+                rows = self._conn.execute(
+                    "SELECT turn, vector FROM turn_vectors "
+                    "WHERE agent_id = ? AND conversation_id = ?",
+                    (self._agent_id, self._conversation_id),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                rows = []
+            self._turn_vector_cache = {
+                row["turn"]: json.loads(row["vector"]) for row in rows}
+        return self._turn_vector_cache
 
     def text_for_turns(self, turns: list[int]) -> dict[int, str]:
         """The wording of specific turns, as turn -> text.

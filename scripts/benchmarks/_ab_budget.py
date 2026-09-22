@@ -67,7 +67,8 @@ PERMANENT = {"BadRequestError", "UnprocessableEntityError", "PermissionDeniedErr
 
 
 def open_memory(store: Path, llm, embedder, top_k, cold, budget, hops,
-                compact=False, hydrate=0):
+                compact=False, hydrate=0, facts=None, lines=None, whole=0,
+                dedupe=False, overlap=None):
     return NeuromorphicMemory(
         llm_provider=llm,
         embedding_provider=embedder,
@@ -83,15 +84,55 @@ def open_memory(store: Path, llm, embedder, top_k, cold, budget, hops,
                 rerank_top_k=budget,
                 compact_validity=compact,
                 hydrate_top_k=hydrate,
+                # None renders every retrieved fact, which is what every
+                # measurement before this argument existed did.
+                context_facts_top_k=facts,
+                # Likewise: `lines=None` hydrates whole turns, `whole=0` and
+                # `dedupe=False` leave the source block exactly as it was.
+                hydrate_lines=lines,
+                hydrate_full_turns=whole,
+                dedupe_source_headers=dedupe,
+                # Screened at overlap 80 as "17 tokens saved, presence flat"
+                # and parked, correctly, while context sat 457 under the
+                # ceiling. The ceiling is now 1,000 and the render is 968, so
+                # the headroom that made it not worth having is gone. It drops
+                # a printed fact wholly restated by a better-ranked one, and
+                # runs before the print limit, so it buys distinct facts rather
+                # than fewer facts. Hydration reads the unseparated list, so
+                # turns are byte-identical either way.
+                fact_overlap_max=overlap,
                 defer_reinforcement_writes=True,
             ),
         ),
     )
 
 
+def close_readonly(memory) -> None:
+    """Close a store without writing back what reading it produced.
+
+    `defer_reinforcement_writes=True` is not enough on its own, and every
+    harness here assumed it was. It only buffers the writebacks; `close()` then
+    calls `flush_reinforcements()` and commits them, which resets `weight` to
+    1.0 and advances `consolidation_index` and `last_reinforced_turn` on every
+    record the queries touched. A screen that opens a store, asks a few hundred
+    questions and closes it therefore leaves the store measurably different
+    from how it found it, and a sweep that reopens the same store per
+    configuration has its later configurations reading the damage its earlier
+    ones did.
+
+    Dropping the buffer first makes the read genuinely read-only. Use this
+    anywhere the store is being measured rather than used.
+    """
+    memory._router._pending_reinforcements = {}
+    memory.close()
+
+
 async def answer(memory, llm, question: str) -> tuple[str, int]:
     retrieved = await memory._router.retrieve(question, memory.current_turn + 1)
-    context = memory._router.format_context(retrieved)
+    # The question is passed so that `hydrate_lines` can pick the lines it is
+    # about. Omitting it silently degrades sparse hydration to a choice made
+    # from the retrieved facts alone.
+    context = memory._router.format_context(retrieved, question)
     system = ANSWER_SYSTEM_PROMPT + (f"\n\n{context}" if context else "")
     text = await llm.chat(
         messages=[{"role": "user", "content": question}], system_prompt=system

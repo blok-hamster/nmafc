@@ -1,61 +1,82 @@
 # What changed on `muna`
 
 A summary of the work on this branch, why each piece exists, and what it was
-worth. Every number here was measured on the standard LoCoMo protocol (1,540
-questions, adversarial category excluded) with an LLM judge, unless it says
-otherwise.
+worth. Every number here was measured on the standard LoCoMo protocol (the four
+scored categories, 1,539–1,540 questions depending on the run) with an LLM judge,
+unless it says otherwise. The adversarial category is excluded from that
+denominator to stay comparable with published work, and is separately measured
+and reported rather than quietly dropped.
 
 ---
 
 ## The short version
 
-The framework started 5.9 points behind a plain RAG baseline. It now scores
-level with it on a third less context.
+The framework started 5.9 points behind a plain RAG baseline. It now beats it by
+6.8 on a third less context.
 
 | date | run | ours | RAG | our context |
 |---|---|---|---|---|
 | 14 Aug | first full run | 54.35% | 60.26% | 440 tok |
 | 19 Aug | `full_v2` | 59.55% | – | 1,304 tok |
 | 21 Aug | `full_v3` | 63.31% | 64.22% | 656 tok |
-| 5 Sept | `full_v3` + hydration + turn dates | **66.95%** | 66.17% | 1,137 tok |
+| 5 Sept | `full_v3` + hydration + turn dates | 66.95% | 66.17% | 1,137 tok |
+| **10 Sept** | **paired run, answer-type gate + grounding** | **71.4%** | **64.6%** | **964 tok** |
 
-That is **+12.6 points** overall. The last row is a full run on the standard
-protocol, not an A/B delta, and against the previous run it is paired on 1,529
-shared questions: **120 fixed, 64 broken, McNemar p = 4.4e-05.**
+That is **+17.0 points** overall on our own arm, and the lead over RAG is
+**+6.8, McNemar exact p = 5.5e-08, gross movement +238/−133**.
 
-Since that run the prompt has lost another 12.4% to `compact_validity`, at no
-measurable cost over 1,537 paired questions (66.23% → 66.10%, p = 0.91). The
-shipped configuration now renders **997 tokens against RAG's 1,454**, which is
-where "a third less context" comes from. See *Cost, not score*.
+The last row is different in kind from the ones above it, and the difference
+matters more than the number. **Both arms answered every question in the same
+window against the same stores**, with both predictions written to the same row.
+Earlier rows are two runs subtracted from each other, which imports cross-run
+drift into every comparison and makes McNemar inapplicable. Everything from 10
+September onward is paired.
 
-Two warnings about how to read that table, and the second matters more than the
-first.
+Pairing also settled how much drift there actually is. Re-running our own arm
+against its own saved output moved **0.1 points at n=841** — gross +21/−22, so
+43 individual answers changed to produce a tenth of a point. That is far tighter
+than the 1.5 to 2 points earlier sections of this file assume, and it is why the
+warning that used to sit here ("do not claim superiority over RAG on 0.78
+points") no longer applies to a paired result. It still applies to any two
+numbers taken from different runs.
 
-**Do not claim overall superiority over RAG on 0.78 points.** Cross-run drift is
-1.5 to 2 points, so the honest statement about the overall column is *parity*.
-The +3.64 within our own arm is paired and safe; the overall gap over RAG is
-not.
+**The overall column is still the least interesting thing here.** The two systems
+do not fail in the same places:
 
-**The overall column is the least interesting thing here anyway.** The two
-systems do not fail in the same places:
+| category | n | ours | RAG | delta | McNemar exact |
+|---|---|---|---|---|---|
+| **temporal** | 321 | **71.7%** | 46.1% | **+25.5** | p = 1.1e-14 |
+| **multi-hop** | 96 | **57.3%** | 44.8% | **+12.5** | p = 0.0075 |
+| single-hop | 281 | 50.9% | 45.6% | +5.3 | p = 0.133 |
+| open-domain | 841 | 79.8% | 80.3% | −0.5 | p = 0.804 |
+| adversarial | 446 | 35.9% | 50.4% | **−14.6** | p = 4.1e-08 |
 
-| category | ours | RAG | delta |
-|---|---|---|---|
-| temporal | 65.4% | 49.2% | **+16.2** |
-| multi-hop | 51.0% | 47.9% | +3.1 |
-| single-hop | 48.6% | 46.1% | +2.5 |
-| open-domain | 75.7% | 81.3% | −5.7 |
+Temporal and multi-hop are the result. A 25-point lead on "when did it happen"
+is exactly the category the design was argued for, and multi-hop clears
+significance despite n=96. Single-hop and open-domain are ties — the +5.3 is not
+a win at p=0.133 and the −0.5 is not a loss either, and neither should be quoted
+as one.
 
-A 16-point lead on temporal questions is far outside drift, and it is exactly
-the category the design was argued for: questions about *when* something
-happened and what had changed by then. RAG wins open-domain, which is fair,
-because open-domain is "find the passage that says it" and that is what RAG is
-for. So the result is not a tie. It is two systems with different shapes.
+Two things this table does that the earlier ones did not. It reports
+**adversarial**, which published comparisons drop and which we lose badly;
+dropping the category you lose is not a measurement decision. And it reports
+McNemar per category, so a reader can see which rows are results and which are
+noise without having to know the sample sizes by heart.
 
-The other finding, which held across every experiment on the branch:
-**everything that gave the model more or better material helped, and everything
+Two findings held across every experiment on the branch:
+
+**Everything that gave the model more or better material helped, and everything
 that tried to take material away hurt.** Five separate experiments, no
-exceptions.
+exceptions — until width, which gave the model more material on open-domain and
+bought +1.6 at p=0.111 for 332 extra tokens. More material has stopped paying.
+The remaining wins came from telling the model what *shape* of answer to give
+and from ranking evidence better, not from handing it more.
+
+**Nothing under roughly 800 questions in this benchmark has survived being
+re-measured at full scale.** Four separate results were mispriced by a small
+sample: a 6-question token estimate 292 tokens high, an 8-question clause read, a
+108-question gate result that read +5.6 and settled at +1.6, and a 281-question
+precision screen that could not see the miss it caused.
 
 ---
 
@@ -195,22 +216,63 @@ property of the transcript rather than of anything a model produced. If you are
 working from an older store, run that script before you measure anything
 temporal.
 
+### 5. The answer-type gate
+
+The last change that paid, and the first one that did not work by giving the
+model more material.
+
+A question often names the category of its own answer. "In which **state** is the
+shelter" — the store held `Stamford`, the answer given was "Stamford", and it was
+marked wrong. "In which **country** was the pendant bought" — the store held
+`Paris`, the answer given was "Paris", marked wrong. Both are evidence *for* the
+answer rather than the answer.
+
+No amount of retrieval fixes this, because the right fact was already in the
+window. The cause is our own answering rules, which say to reuse the exact
+wording of the retrieved facts because a synonym scores as a miss. That is
+correct nearly everywhere and worth a large part of the score. On a question that
+names the kind of answer it wants it is exactly backwards: "Connecticut" is not a
+synonym for "Stamford", it is the level the question asked for, and "Stamford" is
+the reason to believe it.
+
+Measured over 1,535 paired questions *before* the gate existed:
+
+| | n | ours | RAG |
+|---|---|---|---|
+| questions naming a type | 238 | 56.7% | 61.8% |
+| everything else | 1,297 | 66.7% | 64.9% |
+
+The whole of the deficit lived in the typed questions, and both arms failed them
+together — which is what a shared prompt rule looks like from the outside.
+
+`integration/answer_type.gate()` emits one short line, and only when the question
+names a type. It is a regex over a string already in the prompt: no embedding, no
+model call, no store access, and no cost on the ~85% of questions it stays quiet
+on. It is deliberately a *level shift and never an invention* — it licenses
+naming the state a retrieved town sits in, and says explicitly that it does not
+license naming a state when nothing retrieved points at one, because the failure
+it trades against is answering "Connecticut" from no evidence at all.
+
 ---
 
 ## The changes that did not pay
 
-All five are measured, all are reproducible from the scripts in this branch, and
-they are as much a result as the positives are.
+All are measured, all are reproducible from the scripts in this branch, and they
+are as much a result as the positives are.
 
 | experiment | effect | script |
 |---|---|---|
-| Rewriting the answer prompt | **−1.04** | `_ab_prompt.py` |
+| Rewriting the answer prompt | **−1.04**, and +0.5 at p=0.774 when retried under deep hydration: no effect | `_ab_prompt.py` |
 | Decay as a ranking signal | **−5.3** reachability | `_sweep_weight_signal.py` |
 | Contradiction pruning | **−5.9** | `_detect_supersessions.py`, `_apply_invalidation.py` |
 | Context compaction | +0.5, inside noise | `_ab_budget.py --compact-b` |
 | Noise control (placebo) | −0.3, as designed | `_ab_dates.py`, `_ab_noise.py` |
+| Width on open-domain | +1.6 at p=0.111, for 332 tokens, and unshippable | `_run_open_domain_full.py` |
+| The list-shape gate | +1.6 at p=0.458 over 322 questions | `_screen_list_gate.py`, `list_shape.py` |
+| `commit_short` clause | adversarial +5.4, temporal −4.0, net **+0.0** | `_ab_budget.py --variant` |
+| `commit_exact` clause | adversarial +0.2, temporal −3.4 | `_ab_budget.py --variant` |
 
-Three of these are worth explaining, because each one closes off a line of work.
+Several are worth explaining, because each one closes off a line of work.
 
 ### Decay cannot reach the score through ranking
 
@@ -285,6 +347,113 @@ Adding an explanation of the `<SOURCE>` block to the system prompt lost 1.04
 points and was negative in every category (multi-hop worst, −5.2). Answer
 instructions are not where the headroom is.
 
+Tried a second time, because the first measurement was taken when `<SOURCE>`
+held five source turns beside all twenty facts and was a minor part of the
+prompt. Under the configuration that block is now the larger half of, on 400
+open-domain questions with both prompts generated in one session:
+
+```
+n=400   A 77.0%   B 77.5%   +0.5 points
+fixed 7  broke 5  p = 0.774
+```
+
+Twelve discordant pairs in four hundred questions. The two prompts agree almost
+everywhere, which says the model was already using `<SOURCE>` without being told
+what it was, so naming it changes nothing in either direction. The −1.04 does
+not survive either; read the effect as zero. Closed at both configurations.
+
+### Width on open-domain: real, and still not shippable
+
+Open-domain is the one scored category we do not lead, so it got the most
+attention. Three arms, one window, 830 paired questions, splitting the two knobs
+that had previously only been moved together:
+
+| arm | accuracy | tokens | vs shipped | vs RAG |
+|---|---|---|---|---|
+| wide (hydrate 10, grounding 0.003) | 81.3% | 1,300 t | +1.6, +35/−22, p = 0.111 | +1.2, p = 0.426 |
+| grounding only (0.003) | 80.6% | 1,047 t | +0.8, +31/−24, p = 0.419 | +0.5, p = 0.797 |
+| shipped | 79.8% | 968 t | baseline | −0.4, p = 0.867 |
+| RAG | 80.1% | 1,464 t | | |
+
+Splitting the knobs was worth doing on its own: **facts are about twice as
+token-efficient as hydrated turns.** Grounding alone gets half the gain for a
+sixth of the token cost. Marginal render cost is roughly 30 tokens per printed
+fact against 55 per hydrated turn, and the accuracy per token follows it.
+
+Neither arm ships, and significance is not the reason. **Applying width to
+open-domain only requires knowing the category, and the category is not knowable
+at inference time.** It is a column in the benchmark file, not a property of the
+question. A policy keyed on it is a benchmark artefact, and building one would
+have been fitting to the test set through the back door.
+
+### The list-shape gate: built, wired, measured, dead
+
+The obvious repair for the previous problem. If the category cannot be known but
+the *shape of the question* can, gate on that instead.
+`integration/list_shape.wants_list()` decides from the question string alone
+whether it asks to enumerate — "What activities does Melanie partake in" wants
+four things — using a plural head noun in the wh-phrase plus a small set of
+explicit list phrasings. Regex only, same cost profile as the answer-type gate.
+
+The signal it finds is real. It fires on 327 of 1,985 questions, and we score
+**50.2% where it fires against 66.0% where it does not**. A 16-point gap keyed on
+something knowable at inference is exactly what the width work needed.
+
+Handing those questions more context does not close it. Every firing question
+answered both ways, 322 of them:
+
+| category | n | delta | discordant | p |
+|---|---|---|---|---|
+| open-domain | 108 | +5.6 | +8/−2 | 0.109 |
+| single-hop | 141 | **−1.4** | +6/−8 | 0.791 |
+| adversarial | 58 | +1.7 | +3/−2 | 1.000 |
+| multi-hop | 13 | +0.0 | | |
+| temporal | 2 | +0.0 | | |
+| **all** | **322** | **+1.6** | **+17/−12** | **0.458** |
+
+Wide 50.9% against the shipped 49.4%, for 324 extra tokens a question. Single-hop
+— the category the gate was built from — goes backwards. Applied as a policy over
+all 1,985 it moves 63.4% to 63.66% and 963 tokens to 1,017.
+
+The module is kept, tested and documented, wired into nothing. The detection is
+sound and the 16-point gap is worth attacking; more context is not how.
+
+**This is also where the sample-size rule came from.** An earlier read of this
+same gate, on the 108 open-domain questions above, reported **+5.6** and looked
+like the best result of the cycle. It was nine coin flips landing one way. It
+regressed the moment there were more of them.
+
+### Two prompt clauses for adversarial, both dead
+
+Adversarial is the clear loss: 35.9% against RAG's 50.4%, −14.6, p = 4.1e-08. The
+obvious theory is that we refuse too often. Measured, that theory does not hold —
+RAG refuses at a rate between comparable to ours and higher than ours, depending
+which refusal detector you use, and still scores 14.5 points above us. Roughly a
+third of the gap is recoverable refusal. The rest is wrong answers on questions
+we did commit to, which no instruction reaches.
+
+Two clauses were built and measured over all 1,984:
+
+| clause | adversarial | temporal | all five |
+|---|---|---|---|
+| `commit_short` | **+5.4**, p = 0.0022 | **−4.0**, p = 0.0024 | +0.0, +72/−72 |
+| `commit_exact` | +0.2 | **−3.4**, p = 0.0074 | strictly worse than both |
+
+`commit_short` buys adversarial and pays for it exactly, one question for one
+question, out of temporal and multi-hop. `commit_exact` was an attempt to keep
+the gain and drop the damage by deleting the wording blamed for it. It deleted
+the gain and kept the damage: its refusal rate came back identical to the
+shipped configuration, meaning its second sentence had cancelled its first.
+
+The diagnosis that produced `commit_exact` was wrong, and worth recording as
+wrong. It claimed one word was doing the temporal damage. Only 6 of the 13
+temporal breakages overlapped with `commit_short`'s 15, so the two clauses were
+not breaking the same questions and the single-word theory never had support.
+
+The conclusion is structural rather than about wording. **The behaviour that
+answers an adversarial question and the behaviour that dates a temporal one are
+welded together in this model, and the join is not in the prompt.**
+
 ---
 
 ## Cost, not score
@@ -330,6 +499,12 @@ Read it as "any real effect is inside ±1.2 points", not as "identical". On by
 default because 12.4% is a certain saving against an unmeasurable cost. The
 SOURCE block keeps its headers exactly as stored: verbatim that has been edited
 is not verbatim.
+
+The 997 above is this A/B's own measurement. In the 10 September paired run the
+shipped configuration renders **963 tokens against RAG's 1,461**, which is where
+the "a third less context" headline comes from. Marginal render cost, useful for
+budgeting any further change: about **30 tokens per printed fact and 55 per
+hydrated turn**.
 
 ### Latency, and a number that was never what it looked like
 
@@ -461,6 +636,18 @@ All in `src/nmafc/schemas/memory.py`. Defaults preserve existing behaviour.
 | `reinforcement_buffer_limit` | `256` | Flush the buffer once this many records are held, so a caller that only retrieves cannot lose writes |
 | `compact_validity` | `True` | Render validity as `(27 May 2023)` rather than `(Valid: 7:18 pm on 27 May, 2023 - present)`. 12.4% off the prompt |
 | `weight_signal` | `0.0` | RRF boost proportional to decay weight. Leave at 0, see above. |
+| `always_search_cold` | `True` | Search Cold ROM in parallel with Hot on every query, ignoring `theta`. This is what replaced the gated fallback |
+| `rerank_top_k` | `20` | How many records survive RRF fusion. Screening found this is the **only** retrieval setting that moves reachability |
+| `hydrate_full_turns` | `0` | How many top-ranked turns come back whole before `hydrate_lines` trims the rest |
+| `hydrate_lines` | `None` | Keep only the N speaker lines of a hydrated turn that best match the question. `None` = the whole turn |
+| `hydrate_pool` | `0` | Choose hydrated turns by question match across this many candidates instead of by fact rank. Same number of turns, different turns |
+| `hydrate_scan` | `0` | How wide the pool search reads before ranking it |
+| `source_grounding` | `0.0` | Score floor below which a fact is not worth rendering. Raising it to `0.003` bought +0.8 on open-domain for 79 tokens, the best accuracy-per-token of anything measured — and still not significant |
+
+`source_grounding` is the one to reach for first if you are trying to buy
+accuracy. It is not enabled by default because +0.8 at p=0.419 is not a result,
+and turning on a setting whose evidence is a non-significant gain is how a
+benchmark artefact becomes a default.
 
 ---
 
@@ -472,15 +659,22 @@ ones that mutate work on copies.
 
 **A/B experiments** (two configs, same stores, same questions, paired)
 
-- `_ab_budget.py` – retrieval budget, compaction, hydration
+- `_ab_budget.py` – retrieval budget, compaction, hydration, prompt clauses.
+  Also the home of `close_readonly()` and the `SCORED` category tuple
 - `_ab_dates.py` – real dates against turn numbers
 - `_ab_prompt.py` – answer-prompt variants
 - `_ab_link_repair.py` – link resolution
+- `_ab_vs_rag.py` – ours against the RAG arm, both in one window
+- `_run_open_domain_full.py` – full-scale paired runner. Carries `--gate-only`
+  and `--list-gate` so a question subset can be isolated by a property of the
+  *question string* rather than by its category label
 
-**Sweeps**
+**Sweeps and screens** (retrieval only, no generation, no cost)
 
 - `_sweep_weight_signal.py` – decay as a ranking signal
-- `_sweep_context_budget.py`, `_sweep_precision.py`
+- `_sweep_context_budget.py`, `_sweep_precision.py`, `_sweep_hydration.py`
+- `_screen_grounding.py`, `_screen_hydrate_pool.py`, `_screen_ranking.py`,
+  `_screen_list_gate.py`, `_screen_oracle_reach.py`
 
 **Probes and audits**
 
@@ -513,13 +707,27 @@ scoring once reachability says it is worth it.
 
 ### Reproducing a result
 
+The headline table costs nothing to reproduce, because the per-question data is
+committed:
+
+```bash
+# every figure in the results section, from the committed JSON. No API calls.
+python scripts/benchmarks/results/paired_2026_09_10/summarise.py
+```
+
+To re-measure rather than recompute:
+
 ```bash
 # hydration, the headline
 python scripts/benchmarks/_ab_budget.py --hydrate-a 0 --hydrate-b 5 \
     --out /tmp/hydrate.json
 
-# decay as a ranking signal, the headline negative
+# decay as a ranking signal, the headline negative. Retrieval only, ~4 minutes.
 python scripts/benchmarks/_sweep_weight_signal.py --out /tmp/weights.json
+
+# the list gate, on the questions it fires on and only those
+python scripts/benchmarks/_run_open_domain_full.py --list-gate fires \
+    --out /tmp/lg.json
 
 # belief updates
 python scripts/benchmarks/_test_updates.py \
@@ -529,14 +737,27 @@ python scripts/benchmarks/_test_updates.py \
 All of them read `NMAFC_BENCH_PROVIDER` and the rest of the configuration from
 `.env`. Nothing is hardcoded and `.env` is gitignored.
 
+Two things to know before running any of them against the real stores. **Reading
+a store writes to it** unless the script calls `close_readonly()` — retrieval
+reinforces what it returns, so one question mutates about 14 records. And
+**nothing mutates a store in place**: every experiment that changes state copies
+first, because the ten indexed stores cost ~5.3 hours of paid ingestion to
+rebuild and are treated as immutable inputs.
+
 ---
 
 ## Caveats, honestly stated
 
-- **Cross-run drift is about 1.5 to 2 points.** An unchanged arm scored 66.12%
-  and then 66.56% on consecutive runs. Any cross-run claim smaller than 2 points
-  is not safe. This is why every result above that matters was measured as a
-  paired A/B on the same stores, not by comparing two full runs.
+- **Cross-run drift is smaller than this file used to assume, and the reason to
+  pair is not drift anyway.** The 1.5-to-2-point figure quoted in earlier
+  revisions came from small samples. Re-running our own arm against its saved
+  output at n=841 moved **0.1 points**, gross +21/−22. The real argument for
+  pairing is statistical rather than defensive: on 1,985 questions the two arms
+  agree 1,473 times, and those agreements carry no information about which is
+  better. Comparing totals discards the 512 disagreements that are the entire
+  evidence. Pair, and report gross movement (+N/−M) rather than the net, because
+  a net of +0.0 can hide 72 questions fixed and 72 broken — which is exactly what
+  `commit_short` did.
 
 - **68.4% of the facts that survive in Hot RAM are classified `CoreAnchor`**,
   whose base decay rate is 0, so decay barely runs at all in practice. At
@@ -557,14 +778,24 @@ All of them read `NMAFC_BENCH_PROVIDER` and the rest of the configuration from
   does not enter ranking, so the two are equivalent for retrieval. It changes
   what the stores look like afterwards, not what the model saw.
 
-- **We have never measured our latency against RAG's under the same
-  conditions.** Every comparison available is two different runs on two
-  different nights against a shared provider quota, and two runs of the
-  *identical* RAG arm came out 91% apart (4,694 ms and 2,460 ms). Structurally
-  both arms make the same two network calls and ours sends a 22% smaller
-  prompt, so a near-tie with a small edge to us is what the architecture
-  predicts — but that is reasoning, not a result. One run with both arms in the
-  same session would settle it.
+- **Latency: settled, and the mean was never the right statistic.** This used to
+  read "we have never measured our latency against RAG's under the same
+  conditions", because every comparison available was two runs on two nights
+  against a shared quota — two runs of the *identical* RAG arm once came out 91%
+  apart. The paired run settles it, both arms interleaved in one window:
+
+  | | p50 | p75 | p90 | p99 | mean |
+  |---|---|---|---|---|---|
+  | ours | 1,741 ms | 2,407 ms | 3,559 ms | 26,100 ms | 2,721 ms |
+  | RAG | 1,769 ms | 2,398 ms | 3,346 ms | 12,019 ms | 2,295 ms |
+
+  **Indistinguishable through p90** — we are marginally faster at the median and
+  marginally slower at p90, and neither gap is worth a sentence. The 19% gap in
+  the *mean* is entirely tail, and both arms top out at ~93.8 s, which is a
+  provider retry ladder rather than anything either architecture computes. Quote
+  the median. An earlier revision of the README claimed we were "roughly 6×
+  slower" off exactly this mean, on two unpaired runs; that claim was wrong and
+  has been removed.
 
 - The belief-update questions were mined from LoCoMo, which was not built to
   test belief updates. LongMemEval is the right dataset for that and has not
@@ -576,28 +807,50 @@ All of them read `NMAFC_BENCH_PROVIDER` and the rest of the configuration from
 
 Ranked by expected value, given everything above.
 
-~~1. **Turn hydration on in the arm configs.**~~ Done, 5 September. It was the
-whole of the 63.31% -> 66.95% jump, together with the dates backfill.
+~~**Turn hydration on in the arm configs.**~~ Done, 5 September. It was the whole
+of the 63.31% → 66.95% jump, together with the dates backfill.
 
-1. **One run with both arms in it.** Everything comparing us to RAG right now is
-   two runs on two different nights, which is why the 0.78-point accuracy gap
-   and the 300 ms latency gap both have to be called ties. A single session
-   settles accuracy and latency at once, and the 12.4% the prompt just lost
-   buys some of the budget for it.
-2. **Close the open-domain gap.** RAG leads by 5.7 points there and that is the
-   only category it still wins. Those questions want the passage, not the fact,
-   which is exactly what hydration supplies, so raising `hydrate_top_k` above 5
-   is the cheap thing to try first.
-3. **Fix `CoreAnchor` over-classification in the extractor.** Nothing about
+~~**One run with both arms in it.**~~ Done, 10 September. It settled accuracy
+(+6.8 on the scored set, p = 5.5e-08), latency (a tie through p90), and the size
+of cross-run drift (0.1 points) in one window. Everything above is now paired.
+
+~~**Close the open-domain gap.**~~ Closed, though not the way this list expected.
+Open-domain is 79.8% against RAG's 80.3%, a tie at p=0.804, and it got there from
+better ranking rather than more hydration. Raising `hydrate_top_k` — the "cheap
+thing to try first" — was tried at full scale and bought +1.6 at p=0.111 for 332
+extra tokens, which is not affordable under the 1,000-token budget.
+
+Still open, ranked by expected value:
+
+1. **The list-shaped questions.** We score 50.2% on the 327 questions
+   `wants_list` fires on against 66.0% on the rest, and that gap is keyed on
+   something knowable at inference time. Width has been tried and does not close
+   it. What has *not* been tried is changing the answering behaviour rather than
+   the retrieval: a partial list scores like a wrong answer, so the question is
+   whether the model can be got to enumerate what it holds instead of naming the
+   first item.
+2. **Fix `CoreAnchor` over-classification in the extractor.** Nothing about
    forgetting can be evaluated properly until decay actually runs. Needs full
    re-ingestion (~5.3h) because `memory_type` is set at write time, so batch it
    with every other write-time change. Expect the LoCoMo number to go *down*.
-4. **LongMemEval.** LoCoMo rewards retrieval breadth, which is why breadth is
+   Note the cheap half of this was already checked: **re-labelling tiers on
+   existing stores takes about 4 minutes**, and doing so disproved the theory
+   that the 68% anchor share was a bug. Only changes that must happen at write
+   time justify the re-ingest.
+3. **LongMemEval.** LoCoMo rewards retrieval breadth, which is why breadth is
    what wins here. A dataset built around belief updates would test the parts of
    this design that LoCoMo cannot.
+4. **Adversarial, if at all, from somewhere other than the prompt.** Two clauses
+   were measured and both traded temporal for adversarial one question for one
+   question. Anything further needs a different mechanism, not different wording.
 5. **Not** more work on the supersession detector. The failure there is not a
    threshold or a prompt, it is that the signal does not exist in the
    embeddings.
+6. **Not** re-ingestion for its own sake. The ten stores were last written on 10
+   September after roughly 6,000 questions were answered against them, with no
+   stale WAL files. Re-ingesting replaces the artefact every number in this file
+   was measured on, and is only warranted if the extractor, the chunker, the
+   embedding model or the fact schema changes.
 
 ---
 
@@ -605,9 +858,19 @@ whole of the 63.31% -> 66.95% jump, together with the dates backfill.
 
 ```bash
 python -m pytest tests/unit -q
-# 368 passed, 3 skipped
+# 547 passed, 3 skipped
 ```
 
 New: `test_link_resolution.py`, `test_link_rewiring.py`, `test_turn_dates.py`,
 `test_deferred_reinforcement.py` -- the last of these because `defer_reinforcement_writes`
 had no test at all, which is why flipping its default broke nothing.
+
+Then `test_answer_type.py`, `test_list_shape.py`, `test_grounding.py`,
+`test_quantities.py` for the question-inspection modules. These are cheap to test
+properly because they are pure functions of a string: no store, no network, no
+model. `test_list_shape.py` is worth reading even though the module it covers is
+not wired in. It asserts precision harder than recall, and it carries a
+`TestTheKnownMisses` class of list-shaped questions the gate deliberately does
+*not* catch, recorded rather than fixed — a rule loose enough to catch "Where has
+Maria made friends?" fires on the single-answer questions too, and a miss costs
+only the status quo while a false fire costs real tokens.

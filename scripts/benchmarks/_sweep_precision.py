@@ -23,8 +23,9 @@ becomes {may, 2023} and a fact reading "6 May 2023" scores as carrying it; the
 strict test demands every token as a whole word and fails on any paraphrase.
 The truth is between them, and a policy worth adopting should move both.
 
-Retrieval only. No generation, no judging, reinforcement deferred and never
-flushed, so the run's stores are left exactly as they were.
+Retrieval only. No generation, no judging, and closed through `close_readonly`,
+so the run's stores are left exactly as they were. Deferring the reinforcement
+writes does not achieve that on its own -- `close()` commits the buffer.
 
 Usage:
     python -u scripts/benchmarks/_sweep_precision.py --limit 20
@@ -62,6 +63,7 @@ from nmafc.schemas.memory import DecayConfig  # noqa: E402
 from nmafc.storage.config import NMafcConfig, StorageConfig  # noqa: E402
 from nmafc.wrapper import NeuromorphicMemory  # noqa: E402
 
+from scripts.benchmarks._ab_budget import close_readonly  # noqa: E402
 from scripts.benchmarks.arms.base import build_dated_exchanges  # noqa: E402
 from scripts.benchmarks.datasets.locomo_loader import load_locomo  # noqa: E402
 from scripts.benchmarks._probe_answered_wrong import strict_present  # noqa: E402
@@ -220,7 +222,7 @@ async def run(args: argparse.Namespace) -> None:
                         loose, strict, tokens, len(chosen)
                     )
         finally:
-            memory.close()
+            close_readonly(memory)
 
     if not pool_sizes:
         print("nothing measured")

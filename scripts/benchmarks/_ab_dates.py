@@ -114,7 +114,7 @@ def open_memory(store: Path, llm, embedder) -> NeuromorphicMemory:
 
 async def answer(memory: NeuromorphicMemory, llm, question: str) -> str:
     retrieved = await memory._router.retrieve(question, memory.current_turn + 1)
-    context = memory._router.format_context(retrieved)
+    context = memory._router.format_context(retrieved, question)
     system = ANSWER_SYSTEM_PROMPT + (f"\n\n{context}" if context else "")
     text = await llm.chat(
         messages=[{"role": "user", "content": question}],
