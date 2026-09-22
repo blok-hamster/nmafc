@@ -325,7 +325,6 @@ class RetryingEmbeddingProvider(EmbeddingProvider):
         self.retries = 0
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
-        last: Exception | None = None
         backoff = _Backoff(self._max_retries, "embed")
         while True:
             if self._limiter:
@@ -336,7 +335,6 @@ class RetryingEmbeddingProvider(EmbeddingProvider):
                 backoff.recovered()
                 return result
             except Exception as exc:  # noqa: BLE001 - classified below
-                last = exc
                 if not await backoff.wait(exc):
                     raise
                 self.retries += 1

@@ -67,6 +67,16 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
 
+# Prompt literals and one-off diagnostic scripts legitimately exceed 100 cols;
+# E501 there is noise, not a defect. F823/F821 etc. still apply everywhere.
+[tool.ruff.lint.per-file-ignores]
+"scripts/benchmarks/*" = ["E501", "E402"]
+"scripts/*.py" = ["E501"]
+"examples/*" = ["E501"]
+"src/nmafc/integration/extractor.py" = ["E501"]
+"src/nmafc/integration/*_provider.py" = ["E501"]
+"src/nmafc/schemas/memory.py" = ["E501"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

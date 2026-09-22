@@ -47,11 +47,17 @@ class StorageConfig(BaseModel):
     embedding_model: str = Field(default="text-embedding-3-small")
     agent_id: str = Field(
         default="default",
-        description="Namespace for agent/tenant isolation. All storage queries are scoped to this ID.",
+        description=(
+            "Namespace for agent/tenant isolation. All storage queries are "
+            "scoped to this ID."
+        ),
     )
     conversation_id: str = Field(
         default="default",
-        description="Conversation session ID. Isolates memories between separate conversation threads.",
+        description=(
+            "Conversation session ID. Isolates memories between separate "
+            "conversation threads."
+        ),
     )
 
     @property
@@ -86,7 +92,9 @@ class NMafcConfig(BaseModel):
         llm_raw = raw.get("llm", {})
 
         storage_raw.setdefault("embedding_dim", embedding_raw.get("dim", 1536))
-        storage_raw.setdefault("embedding_model", embedding_raw.get("model", "text-embedding-3-small"))
+        storage_raw.setdefault(
+            "embedding_model", embedding_raw.get("model", "text-embedding-3-small")
+        )
 
         decay_kwargs = {**decay_raw, **retrieval_raw}
 
@@ -98,7 +106,9 @@ class NMafcConfig(BaseModel):
             decay=decay,
             time_unit=time_raw.get("unit", "turns"),
             llm_provider_model=llm_raw.get("provider_model", "openai/gpt-4o-mini"),
-            embedding_provider_model=embedding_raw.get("provider_model", "openai/text-embedding-3-small"),
+            embedding_provider_model=embedding_raw.get(
+                "provider_model", "openai/text-embedding-3-small"
+            ),
         )
 
     @classmethod

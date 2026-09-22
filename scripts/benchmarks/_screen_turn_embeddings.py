@@ -55,7 +55,6 @@ except ImportError:
 
 from nmafc.integration.factory import create_embedding_provider  # noqa: E402
 from nmafc.integration.grounding import source_scores  # noqa: E402
-
 from scripts.benchmarks._screen_hydrate_pool import content_words  # noqa: E402
 
 

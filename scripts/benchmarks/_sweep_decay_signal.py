@@ -64,7 +64,6 @@ from nmafc.integration.factory import (  # noqa: E402
 from nmafc.schemas.memory import DecayConfig  # noqa: E402
 from nmafc.storage.config import NMafcConfig, StorageConfig  # noqa: E402
 from nmafc.wrapper import NeuromorphicMemory  # noqa: E402
-
 from scripts.benchmarks._ab_budget import close_readonly  # noqa: E402
 from scripts.benchmarks._sweep_context_budget import retrieve_with_retry  # noqa: E402
 from scripts.benchmarks._test_updates import present  # noqa: E402

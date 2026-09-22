@@ -10,9 +10,10 @@ Run:
 from __future__ import annotations
 
 import asyncio
-from nmafc.integration.base import LLMProvider, EmbeddingProvider
-from nmafc.wrapper import NeuromorphicMemory
+
+from nmafc.integration.base import EmbeddingProvider, LLMProvider
 from nmafc.schemas.memory import MemoryStateUpdate
+from nmafc.wrapper import NeuromorphicMemory
 
 
 class MyLLMProvider(LLMProvider):

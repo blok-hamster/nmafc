@@ -13,7 +13,6 @@ import os
 import signal
 import subprocess
 import sys
-import threading
 from pathlib import Path
 
 
@@ -28,7 +27,9 @@ def main() -> None:
     start_p = sub.add_parser("start", help="Start backend + frontend servers")
     start_p.add_argument("--port", type=int, default=8000, help="Backend port (default: 8000)")
     start_p.add_argument("--config", default="configs/default.toml", help="Config TOML path")
-    start_p.add_argument("--production", action="store_true", help="Build frontend and serve from one port")
+    start_p.add_argument(
+        "--production", action="store_true", help="Build frontend and serve from one port"
+    )
     start_p.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
 
     # ── init ──
@@ -126,7 +127,7 @@ def cmd_start(args: argparse.Namespace) -> None:
 
     else:
         # Dev mode: start both servers
-        _print(f"[bold]Dev mode[/bold]")
+        _print("[bold]Dev mode[/bold]")
         _print(f"  Backend:  [cyan]http://localhost:{backend_port}[/cyan]")
         if web_ui_dir:
             _print(f"  Frontend: [cyan]http://localhost:{frontend_port}[/cyan]")
@@ -212,7 +213,7 @@ def cmd_init() -> None:
     try:
         from rich.console import Console
         from rich.panel import Panel
-        from rich.prompt import Prompt, Confirm
+        from rich.prompt import Prompt
         console = Console()
     except ImportError:
         sys.exit("Install rich for the setup wizard: pip install 'nmafc[cli]'")
@@ -287,7 +288,8 @@ def cmd_init() -> None:
 
     new_lines = []
     for line in env_lines:
-        if not any(existing.startswith(line.split("=")[0] + "=") for existing in existing_env.splitlines()):
+        key = line.split("=")[0] + "="
+        if not any(existing.startswith(key) for existing in existing_env.splitlines()):
             new_lines.append(line)
 
     new_lines.extend([
@@ -364,7 +366,6 @@ def cmd_chat(args: argparse.Namespace) -> None:
         from rich.console import Console
         from rich.markdown import Markdown
         from rich.panel import Panel
-        from rich.table import Table
         console = Console()
     except ImportError:
         sys.exit("Install rich for terminal chat: pip install 'nmafc[cli]'")

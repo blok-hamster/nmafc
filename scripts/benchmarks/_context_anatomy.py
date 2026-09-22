@@ -49,7 +49,6 @@ from nmafc.integration.factory import (  # noqa: E402
 from nmafc.schemas.memory import DecayConfig  # noqa: E402
 from nmafc.storage.config import NMafcConfig, StorageConfig  # noqa: E402
 from nmafc.wrapper import NeuromorphicMemory  # noqa: E402
-
 from scripts.benchmarks.datasets.locomo_loader import load_locomo  # noqa: E402
 
 SCORED = {"single-hop", "temporal", "multi-hop", "open-domain"}
@@ -140,7 +139,7 @@ async def run(args: argparse.Namespace) -> None:
     print(f"\n{'=' * 62}")
     print(f"questions sampled      : {questions}")
     print(f"facts per prompt       : {lines_seen / questions:.1f}")
-    print(f"\n  tokens per prompt")
+    print("\n  tokens per prompt")
     print(f"    total              : {per('context'):7.0f}")
     print(f"    fact text          : {per('facts'):7.0f}   "
           f"{total['facts'] / total['context']:5.1%}")

@@ -58,13 +58,12 @@ from nmafc.integration.factory import (  # noqa: E402
     create_embedding_provider,
     create_llm_provider,
 )
-
-from scripts.benchmarks.datasets.locomo_loader import load_locomo  # noqa: E402
 from scripts.benchmarks._probe_verbatim import open_memory  # noqa: E402
 from scripts.benchmarks._sweep_context_budget import (  # noqa: E402
     overlap,
     retrieve_with_retry,
 )
+from scripts.benchmarks.datasets.locomo_loader import load_locomo  # noqa: E402
 
 SCORED = ("single-hop", "temporal", "multi-hop", "open-domain")
 

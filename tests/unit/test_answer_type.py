@@ -11,8 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from nmafc.integration.answer_type import (TYPE_RULE, demanded_type, gate,
-                                           type_tag)
+from nmafc.integration.answer_type import TYPE_RULE, demanded_type, gate, type_tag
 
 
 class TestQuestionsThatNameAType:

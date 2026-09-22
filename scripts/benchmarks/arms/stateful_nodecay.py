@@ -13,10 +13,8 @@ active pruning to the final accuracy/cost metrics.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
 import tempfile
-import time
+from collections.abc import Callable
 from pathlib import Path
 
 from nmafc.integration.base import EmbeddingProvider, LLMProvider
@@ -25,8 +23,14 @@ from nmafc.storage.config import NMafcConfig, StorageConfig
 from nmafc.wrapper import NeuromorphicMemory
 
 from ..evaluation.metrics import ArmResponse
-from .base import (BenchmarkArm, SHORT_ANSWER_RULES, build_dated_exchanges,
-                   strip_answer, timer_split, timer_start)
+from .base import (
+    SHORT_ANSWER_RULES,
+    BenchmarkArm,
+    build_dated_exchanges,
+    strip_answer,
+    timer_split,
+    timer_start,
+)
 
 ANSWER_SYSTEM_PROMPT = """You have a knowledge graph of facts from past conversations, shown in <FACTS> tags.
 Answer the question using these facts. Combine and reason across multiple facts when needed.

@@ -59,11 +59,10 @@ from nmafc.integration.factory import (  # noqa: E402
 from nmafc.schemas.memory import DecayConfig  # noqa: E402
 from nmafc.storage.config import NMafcConfig, StorageConfig  # noqa: E402
 from nmafc.wrapper import NeuromorphicMemory  # noqa: E402
-
+from scripts.benchmarks.arms.base import strip_answer  # noqa: E402
 from scripts.benchmarks.arms.neuromorphic_tuned import (  # noqa: E402
     ANSWER_SYSTEM_PROMPT,
 )
-from scripts.benchmarks.arms.base import strip_answer  # noqa: E402
 from scripts.benchmarks.datasets.locomo_loader import load_locomo  # noqa: E402
 from scripts.benchmarks.evaluation.llm_judge import judge_answer  # noqa: E402
 

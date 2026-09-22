@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +20,9 @@ class EventLog:
     ``event_logger`` parameter. When None, no events are logged.
     """
 
-    def __init__(self, db_path: str, agent_id: str = "default", conversation_id: str = "default") -> None:
+    def __init__(
+        self, db_path: str, agent_id: str = "default", conversation_id: str = "default"
+    ) -> None:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._agent_id = agent_id
         self._conversation_id = conversation_id

@@ -23,12 +23,10 @@ differences come from strategy rather than from a different vector index.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
 import os
 import shutil
 import tempfile
-import time
+from collections.abc import Callable
 from pathlib import Path
 
 from nmafc.integration.base import EmbeddingProvider, LLMProvider
@@ -37,7 +35,7 @@ from nmafc.storage.config import StorageConfig
 from nmafc.storage.hot import HotStorage
 
 from ..evaluation.metrics import ArmResponse
-from .base import BenchmarkArm, SHORT_ANSWER_RULES, timer_split, timer_start
+from .base import SHORT_ANSWER_RULES, BenchmarkArm, timer_split, timer_start
 
 # The refusal clause that used to sit here ("If the answer is not in the
 # excerpts, say I don't know...") was removed on 22 August 2026. SHORT_ANSWER_RULES,

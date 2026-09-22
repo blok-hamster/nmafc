@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 
 from nmafc.integration.base import LLMProvider
-from nmafc.schemas.memory import MemoryStateUpdate, UnifiedMemoryPayload
+from nmafc.schemas.memory import UnifiedMemoryPayload
 
 _SHARED_TAIL = """
 ## Dates:

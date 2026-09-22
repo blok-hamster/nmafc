@@ -53,7 +53,6 @@ except ImportError:
 
 from nmafc.integration.factory import create_llm_provider  # noqa: E402
 from nmafc.storage.cold import ColdStorage  # noqa: E402
-
 from scripts.benchmarks.datasets.locomo_loader import load_locomo  # noqa: E402
 
 SYSTEM = """\

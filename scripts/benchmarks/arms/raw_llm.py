@@ -12,12 +12,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-import time
-
 from nmafc.integration.base import LLMProvider
 
 from ..evaluation.metrics import ArmResponse
-from .base import BenchmarkArm, SHORT_ANSWER_RULES, timer_split, timer_start
+from .base import SHORT_ANSWER_RULES, BenchmarkArm, timer_split, timer_start
 
 # Refusal clause removed on 22 August 2026, for the reason set out in rag.py:
 # SHORT_ANSWER_RULES ends with "NEVER say 'No information available'", and the

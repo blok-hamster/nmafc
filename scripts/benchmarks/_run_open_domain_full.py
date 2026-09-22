@@ -63,22 +63,21 @@ except ImportError:
 from scipy.stats import binomtest  # noqa: E402
 
 from nmafc.integration.answer_type import gate  # noqa: E402
-from nmafc.integration.list_shape import wants_list  # noqa: E402
 from nmafc.integration.factory import (  # noqa: E402
     create_embedding_provider,
     create_llm_provider,
 )
-
+from nmafc.integration.list_shape import wants_list  # noqa: E402
 from scripts.benchmarks._ab_answer_type import PROMPT_B, answer_with  # noqa: E402
-from scripts.benchmarks._ab_conversion import (  # noqa: E402
-    VARIANTS,
-    parse_clauses,
-)
 from scripts.benchmarks._ab_budget import (  # noqa: E402
     PERMANENT,
     close_readonly,
     open_memory,
     with_retries,
+)
+from scripts.benchmarks._ab_conversion import (  # noqa: E402
+    VARIANTS,
+    parse_clauses,
 )
 from scripts.benchmarks.arms.neuromorphic_tuned import (  # noqa: E402
     ANSWER_SYSTEM_PROMPT,

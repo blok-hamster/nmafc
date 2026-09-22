@@ -9,11 +9,10 @@ import math
 
 import pytest
 
-from nmafc.engine.decay import compute_alpha, compute_lambda, compute_weight, decay_record
+from nmafc.engine.decay import compute_alpha, compute_lambda, decay_record
 from nmafc.engine.pruning import apply_suppression, detect_override, identify_prunable
 from nmafc.engine.reinforcement import reinforce
 from nmafc.schemas.memory import DecayConfig, MemoryRecord, MemoryStateUpdate, MemoryType
-
 
 # ============================================================================
 # §2.1 Memory State Representation

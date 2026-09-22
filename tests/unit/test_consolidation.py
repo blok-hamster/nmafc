@@ -1,11 +1,11 @@
-import pytest
 import tempfile
 from pathlib import Path
+
 from nmafc.engine.consolidation import MemoryConsolidator
 from nmafc.schemas.memory import DecayConfig, MemoryRecord, MemoryType
+from nmafc.storage.cold import ColdStorage
 from nmafc.storage.config import StorageConfig
 from nmafc.storage.hot import HotStorage
-from nmafc.storage.cold import ColdStorage
 
 
 def test_rem_consolidation_elevation_and_pruning():
@@ -31,7 +31,7 @@ def test_rem_consolidation_elevation_and_pruning():
         hot.upsert(rec1, [1.0, 0.0, 0.0])
 
         # Run REM sleep consolidation pass
-        count = consolidator.consolidate(current_turn=5)
+        consolidator.consolidate(current_turn=5)
 
         updated_records = hot.get_all()
         assert len(updated_records) == 1

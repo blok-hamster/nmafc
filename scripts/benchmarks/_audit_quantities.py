@@ -57,7 +57,6 @@ from nmafc.integration.quantities import (  # noqa: E402
 )
 from nmafc.integration.query_router import STOPWORDS, split_turn  # noqa: E402
 
-
 # A count and the thing counted, as it is said out loud: "two cats", "3 kids",
 # "five years". Written numbers included, because at these magnitudes people
 # write them out more often than they type them.

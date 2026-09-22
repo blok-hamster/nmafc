@@ -49,7 +49,13 @@ def reciprocal_rank_fusion(
     entity_records: dict[str, MemoryRecord] = {}
     entity_source_priority: dict[str, int] = {}
 
-    source_priority = {"hot_vector": 0, "bfs_hot": 1, "cold_semantic": 2, "cold_keyword": 3, "bfs_cold": 4}
+    source_priority = {
+        "hot_vector": 0,
+        "bfs_hot": 1,
+        "cold_semantic": 2,
+        "cold_keyword": 3,
+        "bfs_cold": 4,
+    }
 
     for source, items in candidate_lists.items():
         for rank_idx, candidate in enumerate(items):

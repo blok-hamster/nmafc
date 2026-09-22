@@ -59,7 +59,6 @@ from nmafc.integration.factory import (  # noqa: E402
 from nmafc.schemas.memory import DecayConfig  # noqa: E402
 from nmafc.storage.config import NMafcConfig, StorageConfig  # noqa: E402
 from nmafc.wrapper import NeuromorphicMemory  # noqa: E402
-
 from scripts.benchmarks.datasets.locomo_loader import load_locomo  # noqa: E402
 
 SCORED = ("single-hop", "temporal", "multi-hop", "open-domain")

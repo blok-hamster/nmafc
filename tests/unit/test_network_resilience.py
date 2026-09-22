@@ -24,7 +24,7 @@ from scripts.benchmarks.resilience import (
 )
 
 
-class _Status(Exception):
+class _StatusError(Exception):
     """An exception that carries an HTTP status, i.e. the server replied."""
 
     def __init__(self, message: str, status_code: int) -> None:
@@ -81,12 +81,12 @@ class TestNetworkErrorClassification:
         # 429 means the service answered. It belongs on the retry-count budget,
         # not the outage budget, or a throttled run would hang for 20 minutes
         # per call instead of backing off and moving on.
-        assert not is_network_error(_Status("RateLimitReached", 429))
+        assert not is_network_error(_StatusError("RateLimitReached", 429))
 
     def test_status_bearing_error_is_never_network(self):
         # A 503 body can literally contain the word "connection"; the presence
         # of a status code is what settles it, not the wording.
-        assert not is_network_error(_Status("upstream connection reset", 503))
+        assert not is_network_error(_StatusError("upstream connection reset", 503))
 
 
 class TestOutageSurvival:
@@ -140,7 +140,7 @@ class TestRateLimitBudgetUnchanged:
     async def test_429s_still_give_up_after_max_retries(self):
         # The outage budget must not silently turn a throttled deployment into
         # an unbounded wait. 429s still stop at max_retries.
-        inner = _FlakyLLM(failures=10_000, error=_Status("429 rate limit", 429))
+        inner = _FlakyLLM(failures=10_000, error=_StatusError("429 rate limit", 429))
         provider = RetryingLLMProvider(inner, limiter=None, max_retries=3)
 
         answer, _ = await provider.chat_with_extraction(
@@ -153,7 +153,7 @@ class TestRateLimitBudgetUnchanged:
 
     @pytest.mark.asyncio
     async def test_non_retryable_error_fails_immediately(self):
-        inner = _FlakyLLM(failures=10_000, error=_Status("400 bad request", 400))
+        inner = _FlakyLLM(failures=10_000, error=_StatusError("400 bad request", 400))
         provider = RetryingLLMProvider(inner, limiter=None, max_retries=6)
 
         answer, _ = await provider.chat_with_extraction(

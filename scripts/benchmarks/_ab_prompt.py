@@ -43,13 +43,12 @@ try:
 except ImportError:
     pass
 
+from scipy.stats import binomtest  # noqa: E402
+
 from nmafc.integration.factory import (  # noqa: E402
     create_embedding_provider,
     create_llm_provider,
 )
-
-from scipy.stats import binomtest  # noqa: E402
-
 from scripts.benchmarks._ab_budget import (  # noqa: E402
     PERMANENT,
     SCORED,

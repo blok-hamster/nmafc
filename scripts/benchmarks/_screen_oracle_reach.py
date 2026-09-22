@@ -159,7 +159,7 @@ def main() -> None:
     # exactly the answer and the ceiling above says how much is left in it.
     rag = json.loads(Path(args.rag).read_text(encoding="utf-8"))
     verdict = {(r["conv"], r["question"]): r for r in rag}
-    print(f"\n  Of the questions WE get wrong, how does RAG do?")
+    print("\n  Of the questions WE get wrong, how does RAG do?")
     print(f"    {'':<26}{'n':>5}{'RAG right':>12}")
     for label, group in (("gold is in some turn",
                           [r for r in lost if r not in misses]),

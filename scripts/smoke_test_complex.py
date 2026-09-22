@@ -265,7 +265,7 @@ async def run_complex_smoke_test() -> None:
         if ephemeral_weights:
             print(f"  Ephemeral avg weight:          {sum(ephemeral_weights) / len(ephemeral_weights):.4f}")
         else:
-            print(f"  Ephemeral records:             all pruned (correct)")
+            print("  Ephemeral records:             all pruned (correct)")
 
         mem.close()
 

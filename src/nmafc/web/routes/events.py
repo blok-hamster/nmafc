@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
-from nmafc.schemas.events import EventType
 
+from nmafc.schemas.events import EventType
 from nmafc.web.deps import get_tenant_memory
 from nmafc.wrapper import NeuromorphicMemory
 

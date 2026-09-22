@@ -64,7 +64,6 @@ from nmafc.integration.factory import (  # noqa: E402
     create_embedding_provider,
     create_llm_provider,
 )
-
 from scripts.benchmarks._ab_budget import (  # noqa: E402
     close_readonly,
     open_memory,
@@ -142,7 +141,7 @@ async def run(args: argparse.Namespace) -> None:
     # A difference in means is not a mechanism. This is: at each threshold, how
     # cleanly does the rule "covered < t, spend the maximum" catch the questions
     # that need turns without also catching the ones that do not.
-    print(f"\n  Thresholding. 'needs turns' = gold in SOURCE only.\n")
+    print("\n  Thresholding. 'needs turns' = gold in SOURCE only.\n")
     print(f"  {'covered <':<12}{'flagged':>9}{'of which need turns':>22}"
           f"{'need turns caught':>20}")
     need = groups.get("gold in SOURCE only", [])

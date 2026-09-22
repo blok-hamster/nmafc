@@ -38,7 +38,6 @@ longer-running conversations should scale lambda down further.
 from __future__ import annotations
 
 import tempfile
-import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -48,8 +47,14 @@ from nmafc.storage.config import NMafcConfig, StorageConfig
 from nmafc.wrapper import NeuromorphicMemory
 
 from ..evaluation.metrics import ArmResponse
-from .base import (BenchmarkArm, SHORT_ANSWER_RULES, build_dated_exchanges,
-                   strip_answer, timer_split, timer_start)
+from .base import (
+    SHORT_ANSWER_RULES,
+    BenchmarkArm,
+    build_dated_exchanges,
+    strip_answer,
+    timer_split,
+    timer_start,
+)
 
 # Retention horizon ~= ln(1/w_prune) / lambda = ln(10) / 0.005 ~= 460 turns.
 LAMBDA_ACTIVE_CONTEXT_TUNED = 0.005

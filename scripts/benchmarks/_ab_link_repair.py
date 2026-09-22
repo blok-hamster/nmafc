@@ -54,6 +54,8 @@ try:
 except ImportError:
     pass
 
+from datasets.locomo_loader import load_locomo  # noqa: E402
+
 from nmafc.integration.factory import (  # noqa: E402
     create_embedding_provider,
     create_llm_provider,
@@ -61,8 +63,6 @@ from nmafc.integration.factory import (  # noqa: E402
 from nmafc.schemas.memory import DecayConfig  # noqa: E402
 from nmafc.storage.config import NMafcConfig, StorageConfig  # noqa: E402
 from nmafc.wrapper import NeuromorphicMemory  # noqa: E402
-
-from datasets.locomo_loader import load_locomo  # noqa: E402
 
 STOP = set(
     "the a an of in on at to for is was were and or with what which who when "

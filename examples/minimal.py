@@ -9,6 +9,7 @@ Run:
 """
 
 import asyncio
+
 from nmafc.wrapper import NeuromorphicMemory
 
 

@@ -7,10 +7,9 @@ by the same base config but isolated in Hot RAM, Cold ROM, and Event Log.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Annotated
 
-from fastapi import Header, HTTPException
+from fastapi import Header
 
 from nmafc.wrapper import NeuromorphicMemory
 

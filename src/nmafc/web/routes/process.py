@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from pydantic import BaseModel, Field
-
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Field
 
 from nmafc.schemas.memory import MemoryStateUpdate
 from nmafc.web.deps import get_tenant_memory

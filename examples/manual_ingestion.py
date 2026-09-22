@@ -13,8 +13,9 @@ Run:
 """
 
 import asyncio
-from nmafc.wrapper import NeuromorphicMemory
+
 from nmafc.schemas.memory import MemoryStateUpdate, MemoryType
+from nmafc.wrapper import NeuromorphicMemory
 
 
 async def main():

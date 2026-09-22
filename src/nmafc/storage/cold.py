@@ -34,7 +34,9 @@ class ColdStorage(ColdStorageBase):
     NULL and are still reachable by keyword.
     """
 
-    def __init__(self, db_path: str, agent_id: str = "default", conversation_id: str = "default") -> None:
+    def __init__(
+        self, db_path: str, agent_id: str = "default", conversation_id: str = "default"
+    ) -> None:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._agent_id = agent_id
         self._conversation_id = conversation_id
@@ -363,7 +365,8 @@ class ColdStorage(ColdStorageBase):
 
     def mark_inactive(self, event_id: int) -> None:
         self._conn.execute(
-            "UPDATE memory_event_log SET is_active = 0 WHERE id = ? AND agent_id = ? AND conversation_id = ?",
+            "UPDATE memory_event_log SET is_active = 0 "
+            "WHERE id = ? AND agent_id = ? AND conversation_id = ?",
             (event_id, self._agent_id, self._conversation_id),
         )
         self._conn.commit()
@@ -573,7 +576,8 @@ class ColdStorage(ColdStorageBase):
 
     def count_active(self) -> int:
         cursor = self._conn.execute(
-            "SELECT COUNT(*) FROM memory_event_log WHERE agent_id = ? AND conversation_id = ? AND is_active = 1",
+            "SELECT COUNT(*) FROM memory_event_log "
+            "WHERE agent_id = ? AND conversation_id = ? AND is_active = 1",
             (self._agent_id, self._conversation_id),
         )
         row = cursor.fetchone()

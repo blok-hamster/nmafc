@@ -1,11 +1,13 @@
-import pytest
 import tempfile
 from pathlib import Path
+
+import pytest
+
+from nmafc.integration.query_router import QueryRouter
 from nmafc.schemas.memory import DecayConfig, MemoryRecord, MemoryType
+from nmafc.storage.cold import ColdStorage
 from nmafc.storage.config import StorageConfig
 from nmafc.storage.hot import HotStorage
-from nmafc.storage.cold import ColdStorage
-from nmafc.integration.query_router import QueryRouter
 
 
 class MockEmbedder:
@@ -58,7 +60,8 @@ async def test_spreading_activation_2_hops():
         hot.upsert(rec2, [0.0, 1.0, 0.0])   # Hop 1 hit via related_entities
         hot.upsert(rec3, [0.0, 0.0, 1.0])   # Hop 2 hit via related_entities
 
-        # Query "spouse" -> Vector search returns Hop 0 (rec1), Spreading Activation traverses to rec2 (Hop 1) and rec3 (Hop 2)
+        # Query "spouse" -> Vector search returns Hop 0 (rec1), Spreading
+        # Activation traverses to rec2 (Hop 1) and rec3 (Hop 2)
         results = await router.retrieve("What is my spouse's info?", current_turn=1)
 
         retrieved_entities = {r.entity_name for r in results}

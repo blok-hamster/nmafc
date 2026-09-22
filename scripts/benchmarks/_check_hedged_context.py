@@ -48,6 +48,8 @@ try:
 except ImportError:
     pass
 
+from datasets.locomo_loader import load_locomo  # noqa: E402
+
 from nmafc.integration.factory import (  # noqa: E402
     create_embedding_provider,
     create_llm_provider,
@@ -55,8 +57,6 @@ from nmafc.integration.factory import (  # noqa: E402
 from nmafc.schemas.memory import DecayConfig  # noqa: E402
 from nmafc.storage.config import NMafcConfig, StorageConfig  # noqa: E402
 from nmafc.wrapper import NeuromorphicMemory  # noqa: E402
-
-from datasets.locomo_loader import load_locomo  # noqa: E402
 
 # Refusals and leaked reasoning. Deliberately broad: an answer that opens with
 # "the facts only mention" has already spent its budget describing the context

@@ -60,7 +60,6 @@ from nmafc.integration.factory import (  # noqa: E402
     create_llm_provider,
 )
 from nmafc.integration.list_shape import wants_list  # noqa: E402
-
 from scripts.benchmarks._ab_budget import (  # noqa: E402
     SCORED,
     close_readonly,

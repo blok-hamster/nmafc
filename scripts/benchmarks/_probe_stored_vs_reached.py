@@ -74,14 +74,13 @@ from nmafc.integration.factory import (  # noqa: E402
     create_embedding_provider,
     create_llm_provider,
 )
-
 from scripts.benchmarks._ab_budget import (  # noqa: E402
     close_readonly,
     open_memory,
     with_retries,
 )
 from scripts.benchmarks._sweep_context_budget import retrieve_with_retry  # noqa: E402
-from scripts.benchmarks._test_updates import present, tokens  # noqa: E402
+from scripts.benchmarks._test_updates import present  # noqa: E402
 
 JUDGE_SYSTEM = """\
 You decide whether a piece of information is present in some text. You are not

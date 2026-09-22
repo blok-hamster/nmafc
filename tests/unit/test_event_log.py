@@ -1,5 +1,4 @@
 import tempfile
-from datetime import datetime, timezone
 
 import pytest
 
@@ -279,10 +278,11 @@ class TestEngineEventIntegration:
             assert e.new_weight is not None
 
     def test_prune_cycle_emits_events(self, event_log: EventLog):
+        import os
+
         from nmafc.storage.cold import ColdStorage
         from nmafc.storage.config import StorageConfig
         from nmafc.storage.hot import HotStorage
-        import tempfile, os
 
         embed_dim = 8
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -295,7 +295,6 @@ class TestEngineEventIntegration:
             cold = ColdStorage(config.cold_uri)
 
             rec = make_record("decayed_thing", weight=0.05)
-            from nmafc.engine.decay import compute_weight
             hot.upsert(rec, [0.1] * embed_dim)
 
             pruned = prune_cycle(

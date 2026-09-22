@@ -50,7 +50,6 @@ from nmafc.integration.factory import (  # noqa: E402
     create_embedding_provider,
     create_llm_provider,
 )
-
 from scripts.benchmarks._ab_budget import SCORED, open_memory  # noqa: E402
 from scripts.benchmarks.arms.neuromorphic_tuned import (  # noqa: E402
     ANSWER_SYSTEM_PROMPT,

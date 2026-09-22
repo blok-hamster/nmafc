@@ -71,7 +71,6 @@ from nmafc.integration.factory import (  # noqa: E402
     create_embedding_provider,
     create_llm_provider,
 )
-
 from scripts.benchmarks._ab_budget import (  # noqa: E402
     close_readonly,
     open_memory,

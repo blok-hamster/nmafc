@@ -28,13 +28,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from nmafc.integration.factory import create_embedding_provider
-from nmafc.schemas.memory import DecayConfig, MemoryRecord, MemoryStateUpdate, MemoryType
-from nmafc.storage.config import NMafcConfig, StorageConfig
-from nmafc.storage.hot import HotStorage
-from nmafc.storage.cold import ColdStorage
-from nmafc.storage.cold_base import ColdStorageBase
 from nmafc.integration.query_router import QueryRouter
-
+from nmafc.schemas.memory import DecayConfig, MemoryRecord, MemoryStateUpdate, MemoryType
+from nmafc.storage.cold import ColdStorage
+from nmafc.storage.config import StorageConfig
+from nmafc.storage.hot import HotStorage
 
 # Graph structure we're building:
 #
@@ -176,7 +174,7 @@ async def run_graph_test() -> None:
         print("                           → pet_bear")
         print("  user_job → workplace_hospital")
         print("  user_allergy (isolated)")
-        print(f"  + 5 filler records (semantically distant noise)")
+        print("  + 5 filler records (semantically distant noise)")
         print()
 
         for update in RECORDS:
@@ -306,7 +304,7 @@ async def run_graph_test() -> None:
         # Determine what vector search alone returns (top_k=2, no graph)
         # by comparing set differences between hop configs
         hop2_only_entities = {"child_lily", "child_noah", "pet_bear"}  # Should appear at hop≥2
-        hop3_only_entities = {"school_elementary"}  # Should appear at hop≥3
+        # school_elementary should only appear at hop≥3 (not asserted below)
 
         checks = []
 
@@ -379,7 +377,7 @@ async def run_graph_test() -> None:
         print(f"\n  Result: {passed_count}/{total_count} checks passed")
 
         # Show entity sets for debugging
-        print(f"\n  ── Entity sets by max_hops ──")
+        print("\n  ── Entity sets by max_hops ──")
         print(f"  max_hops=1: {sorted(set_1hop)}")
         print(f"  max_hops=2: {sorted(set_2hop)}")
         print(f"  max_hops=3: {sorted(set_3hop)}")

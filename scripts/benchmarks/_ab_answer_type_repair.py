@@ -64,7 +64,6 @@ from nmafc.integration.factory import (  # noqa: E402
     create_embedding_provider,
     create_llm_provider,
 )
-
 from scripts.benchmarks._ab_answer_type import (  # noqa: E402
     PROMPT_B,
     answer_with,

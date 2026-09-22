@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
+
 from nmafc.schemas.memory import DecayConfig, MemoryType
 from nmafc.storage.cold_base import ColdStorageBase
 from nmafc.storage.hot import HotStorage
@@ -68,7 +69,9 @@ class MemoryConsolidator:
         for rec in self._hot.get_all():
             if not rec.related_entities:
                 continue
-            cleaned_relations = [rel for rel in rec.related_entities if rel.lower() in active_entities]
+            cleaned_relations = [
+                rel for rel in rec.related_entities if rel.lower() in active_entities
+            ]
             if len(cleaned_relations) != len(rec.related_entities):
                 results = self._hot._table.search().where(f"id = '{rec.id}'").limit(1).to_list()
                 if results:

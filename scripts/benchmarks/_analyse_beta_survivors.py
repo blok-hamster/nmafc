@@ -184,7 +184,7 @@ def main() -> None:
         treat_rows, treat_detail = merge(treat_rows, r), treat_detail + d
 
     print("=" * 70)
-    print(f"Survival of decay-eligible facts, by clustering coefficient")
+    print("Survival of decay-eligible facts, by clustering coefficient")
     print("=" * 70)
     show(f"control  beta = 0   ({len(args.control)} stores)", ctrl_rows)
     show(f"treatment beta = {args.beta}  ({len(args.treatment)} stores)", treat_rows)

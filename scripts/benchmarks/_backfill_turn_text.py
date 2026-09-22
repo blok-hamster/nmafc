@@ -41,7 +41,6 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
 from nmafc.storage.cold import ColdStorage  # noqa: E402
-
 from scripts.benchmarks.arms.base import build_dated_exchanges  # noqa: E402
 from scripts.benchmarks.datasets.locomo_loader import load_locomo  # noqa: E402
 

@@ -58,7 +58,6 @@ import lancedb  # noqa: E402
 
 from nmafc.integration.extractor import EXTRACTION_SYSTEM_PROMPT  # noqa: E402
 from nmafc.integration.factory import create_llm_provider  # noqa: E402
-
 from scripts.benchmarks._ab_budget import with_retries  # noqa: E402
 
 TIERS = ("CoreAnchor", "ActiveContext", "EphemeralState")

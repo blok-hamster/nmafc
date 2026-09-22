@@ -54,7 +54,6 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
 from nmafc.integration.grounding import source_scores  # noqa: E402
-
 from scripts.benchmarks._screen_hydrate_pool import present  # noqa: E402
 
 

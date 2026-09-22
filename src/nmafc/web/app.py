@@ -8,10 +8,10 @@ import os
 import sys
 from pathlib import Path
 
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from nmafc.web.deps import get_tenant_memory, set_base_config, shutdown_all
+from nmafc.web.deps import set_base_config, shutdown_all
 from nmafc.web.routes import config, decay, events, graph, memory, process
 from nmafc.web.ws import manager
 

@@ -333,7 +333,9 @@ class NeuromorphicMemory:
             # The archive gets the same vector Hot RAM is about to store, which
             # is what lets Cold ROM answer by meaning rather than by shared
             # words. It is free: the embedding has already been paid for above.
-            self._cold.append_event(update, self._current_turn, embedding, valid_at=self._current_turn)
+            self._cold.append_event(
+                update, self._current_turn, embedding, valid_at=self._current_turn
+            )
 
             existing = self._hot.get_by_entity(update.entity_name)
             if update.overrides_entity:

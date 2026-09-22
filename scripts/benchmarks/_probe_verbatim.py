@@ -68,15 +68,14 @@ from nmafc.integration.factory import (  # noqa: E402
 from nmafc.schemas.memory import DecayConfig  # noqa: E402
 from nmafc.storage.config import NMafcConfig, StorageConfig  # noqa: E402
 from nmafc.wrapper import NeuromorphicMemory  # noqa: E402
-
 from scripts.benchmarks._ab_budget import close_readonly  # noqa: E402
-from scripts.benchmarks.arms.base import build_dated_exchanges  # noqa: E402
-from scripts.benchmarks.datasets.locomo_loader import load_locomo  # noqa: E402
 from scripts.benchmarks._sweep_context_budget import (  # noqa: E402
     CHARS_PER_TOKEN,
     overlap,
     retrieve_with_retry,
 )
+from scripts.benchmarks.arms.base import build_dated_exchanges  # noqa: E402
+from scripts.benchmarks.datasets.locomo_loader import load_locomo  # noqa: E402
 
 SCORED = ("single-hop", "temporal", "multi-hop", "open-domain")
 
@@ -277,7 +276,7 @@ async def run(args: argparse.Namespace) -> None:
         if label in groups:
             print(groups[label].row(label))
 
-    print(f"\n  RAG-only questions by category")
+    print("\n  RAG-only questions by category")
     for name in SCORED:
         if name in by_category:
             print(by_category[name].row(name))

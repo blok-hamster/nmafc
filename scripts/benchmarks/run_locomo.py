@@ -37,11 +37,11 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-from nmafc.schemas.memory import DecayConfig
 from nmafc.integration.factory import (
     create_embedding_provider,
     create_llm_provider,
 )
+from nmafc.schemas.memory import DecayConfig
 
 from . import ingest_checkpoint
 from .arms.base import BenchmarkArm

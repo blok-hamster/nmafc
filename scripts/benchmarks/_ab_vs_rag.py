@@ -103,16 +103,7 @@ from nmafc.integration.factory import (  # noqa: E402
     create_embedding_provider,
     create_llm_provider,
 )
-
 from scripts.benchmarks._ab_answer_type import PROMPT_B, answer_with  # noqa: E402
-from scripts.benchmarks._ab_conversion import VARIANTS, parse_clauses  # noqa: E402
-from scripts.benchmarks.arms.base import timer_split, timer_start  # noqa: E402
-from scripts.benchmarks.arms.neuromorphic_tuned import (  # noqa: E402
-    ANSWER_SYSTEM_PROMPT,
-)
-from scripts.benchmarks.arms.rag import RagArm  # noqa: E402
-from scripts.benchmarks.datasets.locomo_loader import load_locomo  # noqa: E402
-from scripts.benchmarks.evaluation.llm_judge import judge_answer  # noqa: E402
 from scripts.benchmarks._ab_budget import (  # noqa: E402
     CHARS_PER_TOKEN,
     PERMANENT,
@@ -121,6 +112,14 @@ from scripts.benchmarks._ab_budget import (  # noqa: E402
     open_memory,
     with_retries,
 )
+from scripts.benchmarks._ab_conversion import VARIANTS, parse_clauses  # noqa: E402
+from scripts.benchmarks.arms.base import timer_split, timer_start  # noqa: E402
+from scripts.benchmarks.arms.neuromorphic_tuned import (  # noqa: E402
+    ANSWER_SYSTEM_PROMPT,
+)
+from scripts.benchmarks.arms.rag import RagArm  # noqa: E402
+from scripts.benchmarks.datasets.locomo_loader import load_locomo  # noqa: E402
+from scripts.benchmarks.evaluation.llm_judge import judge_answer  # noqa: E402
 
 # The settled configuration, as measured on the merged haystack: 79.4% against
 # RAG's 80.6% on open-domain at 957 tokens to RAG's 1,459, and ahead of RAG on
@@ -414,7 +413,7 @@ def report(rows: list[dict], blocked: list[tuple[str, str]]) -> None:
     ours_faster = sum(1 for d in diffs if d < 0)
     rag_faster = sum(1 for d in diffs if d > 0)
     p_lat = mcnemar(ours_faster, rag_faster)
-    print(f"\nLATENCY (work only, provider quota waiting excluded)")
+    print("\nLATENCY (work only, provider quota waiting excluded)")
     print(f"  ours    median {statistics.median(r['ours_ms'] for r in rows):8.0f} ms   "
           f"mean {statistics.mean(r['ours_ms'] for r in rows):8.0f} ms   "
           f"throttle {statistics.mean(r['ours_throttle'] for r in rows):7.0f} ms")
@@ -430,7 +429,7 @@ def report(rows: list[dict], blocked: list[tuple[str, str]]) -> None:
     else:
         print(f"  -> {'ours' if ours_faster > rag_faster else 'RAG'} is reliably faster")
 
-    print(f"\nCONTEXT")
+    print("\nCONTEXT")
     print(f"  ours    {statistics.mean(r['ours_chars'] for r in rows) / CHARS_PER_TOKEN:8.0f} tokens")
     print(f"  RAG     {statistics.mean(r['rag_chars'] for r in rows) / CHARS_PER_TOKEN:8.0f} tokens")
 

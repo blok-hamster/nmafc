@@ -19,8 +19,8 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-import time
 import tempfile
+import time
 
 from dotenv import load_dotenv
 
@@ -90,8 +90,8 @@ async def main() -> None:
     # itself from any starting point -- which would undo the context-efficiency
     # result (415 tokens vs RAG's 1497) and put back the per-record reinforcement
     # cost that batching just removed. Compare hop-0 against the full traversal.
-    from nmafc.schemas.memory import DecayConfig
     from nmafc.integration.query_router import QueryRouter
+    from nmafc.schemas.memory import DecayConfig
 
     questions = [qa.question for qa in conv.qa_pairs][:15]
     base = memory._decay_config.model_dump()

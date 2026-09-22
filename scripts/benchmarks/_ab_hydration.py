@@ -94,8 +94,6 @@ from nmafc.integration.factory import (  # noqa: E402
     create_embedding_provider,
     create_llm_provider,
 )
-
-from scripts.benchmarks.evaluation.llm_judge import judge_answer  # noqa: E402
 from scripts.benchmarks._ab_budget import (  # noqa: E402
     PERMANENT,
     close_readonly,
@@ -103,6 +101,7 @@ from scripts.benchmarks._ab_budget import (  # noqa: E402
     with_retries,
 )
 from scripts.benchmarks._ab_vs_rag import timed_ours  # noqa: E402
+from scripts.benchmarks.evaluation.llm_judge import judge_answer  # noqa: E402
 
 
 def mcnemar(rows: list[dict], a: str, b: str) -> tuple[int, int, float]:

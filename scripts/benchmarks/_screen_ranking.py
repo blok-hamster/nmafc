@@ -68,7 +68,6 @@ from nmafc.integration.factory import (  # noqa: E402
     create_embedding_provider,
     create_llm_provider,
 )
-
 from scripts.benchmarks._ab_budget import (  # noqa: E402
     close_readonly,
     open_memory,
@@ -231,10 +230,10 @@ async def run(args: argparse.Namespace) -> None:
               f"{top20:4d} {100 * top20 / n:3.0f}% {top6:3d} "
               f"{100 * top6 / n:3.0f}%")
 
-    print(f"\n  Reaching a record is not answering with it. Anything that gains")
-    print(f"  here still needs a paired generation A/B, both arms in one")
-    print(f"  session, and a check that it costs nothing on the questions we")
-    print(f"  already win.")
+    print("\n  Reaching a record is not answering with it. Anything that gains")
+    print("  here still needs a paired generation A/B, both arms in one")
+    print("  session, and a check that it costs nothing on the questions we")
+    print("  already win.")
 
 
 def main() -> None:

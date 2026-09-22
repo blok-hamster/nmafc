@@ -13,8 +13,7 @@ import math
 from nmafc.engine.reranking import rerank
 from nmafc.integration.grounding import source_scores, terms
 from nmafc.integration.query_router import QueryRouter
-from nmafc.schemas.memory import (DecayConfig, MemoryRecord, MemoryType,
-                                  SearchCandidate)
+from nmafc.schemas.memory import DecayConfig, MemoryRecord, MemoryType, SearchCandidate
 
 
 class TestTerms:

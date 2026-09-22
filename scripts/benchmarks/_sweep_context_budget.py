@@ -65,7 +65,6 @@ from nmafc.integration.factory import (  # noqa: E402
 from nmafc.schemas.memory import DecayConfig  # noqa: E402
 from nmafc.storage.config import NMafcConfig, StorageConfig  # noqa: E402
 from nmafc.wrapper import NeuromorphicMemory  # noqa: E402
-
 from scripts.benchmarks._ab_budget import close_readonly  # noqa: E402
 from scripts.benchmarks.datasets.locomo_loader import load_locomo  # noqa: E402
 
@@ -198,7 +197,7 @@ async def run(args: argparse.Namespace) -> None:
     print(f"\n{'=' * 66}")
     print(f"questions            : {total}")
     print(f"mean candidates found: {sum(pool_sizes) / len(pool_sizes):.1f}")
-    print(f"  (a budget above this cannot add anything)\n")
+    print("  (a budget above this cannot add anything)\n")
     print(f"  {'budget':>7s} {'gold in context':>16s} {'vs top-20':>10s} "
           f"{'context tokens':>15s}")
     base = hits[20] if 20 in hits else hits[budgets[0]]

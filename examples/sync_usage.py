@@ -8,8 +8,8 @@ Run:
     python examples/sync_usage.py
 """
 
-from nmafc.wrapper import SyncNeuromorphicMemory
 from nmafc.schemas.memory import MemoryStateUpdate
+from nmafc.wrapper import SyncNeuromorphicMemory
 
 
 def main():

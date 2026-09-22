@@ -19,7 +19,9 @@ class PostgresColdStorage(ColdStorageBase):
         cold = PostgresColdStorage("postgresql://user:pass@host:5432/nmafc")
     """
 
-    def __init__(self, dsn: str, agent_id: str = "default", conversation_id: str = "default") -> None:
+    def __init__(
+        self, dsn: str, agent_id: str = "default", conversation_id: str = "default"
+    ) -> None:
         try:
             import psycopg2  # type: ignore[import-not-found]
         except ImportError as e:
@@ -95,7 +97,8 @@ class PostgresColdStorage(ColdStorageBase):
         with self._conn.cursor() as cur:
             cur.execute(
                 """INSERT INTO memory_event_log
-                   (agent_id, conversation_id, timestamp, turn, entity_name, fact_content, memory_type, overrides_entity, valid_at)
+                   (agent_id, conversation_id, timestamp, turn, entity_name,
+                    fact_content, memory_type, overrides_entity, valid_at)
                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
@@ -120,7 +123,8 @@ class PostgresColdStorage(ColdStorageBase):
     def mark_inactive(self, event_id: int) -> None:
         with self._conn.cursor() as cur:
             cur.execute(
-                "UPDATE memory_event_log SET is_active = FALSE WHERE id = %s AND agent_id = %s AND conversation_id = %s",
+                "UPDATE memory_event_log SET is_active = FALSE "
+                "WHERE id = %s AND agent_id = %s AND conversation_id = %s",
                 (event_id, self._agent_id, self._conversation_id),
             )
         self._conn.commit()
@@ -167,7 +171,8 @@ class PostgresColdStorage(ColdStorageBase):
                 """SELECT id, timestamp, turn, entity_name, fact_content,
                           memory_type, overrides_entity, is_active, valid_at, invalid_at
                    FROM memory_event_log
-                   WHERE agent_id = %s AND conversation_id = %s AND entity_name = %s AND is_active = TRUE
+                   WHERE agent_id = %s AND conversation_id = %s
+                     AND entity_name = %s AND is_active = TRUE
                      AND invalid_at IS NULL
                    ORDER BY turn ASC""",
                 (self._agent_id, self._conversation_id, entity_name),
@@ -207,7 +212,8 @@ class PostgresColdStorage(ColdStorageBase):
     def count_active(self) -> int:
         with self._conn.cursor() as cur:
             cur.execute(
-                "SELECT COUNT(*) FROM memory_event_log WHERE agent_id = %s AND conversation_id = %s AND is_active = TRUE",
+                "SELECT COUNT(*) FROM memory_event_log "
+                "WHERE agent_id = %s AND conversation_id = %s AND is_active = TRUE",
                 (self._agent_id, self._conversation_id),
             )
             row = cur.fetchone()
@@ -216,7 +222,8 @@ class PostgresColdStorage(ColdStorageBase):
     def count_total(self) -> int:
         with self._conn.cursor() as cur:
             cur.execute(
-                "SELECT COUNT(*) FROM memory_event_log WHERE agent_id = %s AND conversation_id = %s",
+                "SELECT COUNT(*) FROM memory_event_log "
+                "WHERE agent_id = %s AND conversation_id = %s",
                 (self._agent_id, self._conversation_id),
             )
             row = cur.fetchone()

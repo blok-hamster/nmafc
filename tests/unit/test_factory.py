@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from importlib.util import find_spec
+
 import pytest
 
 from nmafc.integration.factory import (
@@ -11,6 +13,10 @@ from nmafc.integration.factory import (
     create_llm_provider,
 )
 from nmafc.storage.config import NMafcConfig
+
+HAS_OPENAI = find_spec("openai") is not None
+HAS_ANTHROPIC = find_spec("anthropic") is not None
+HAS_BOTO3 = find_spec("boto3") is not None
 
 
 class TestParseProviderModel:
@@ -68,13 +74,6 @@ class TestGetApiKey:
     def test_missing_env_returns_none(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         assert _get_api_key("openai") is None
-
-
-from importlib.util import find_spec
-
-HAS_OPENAI = find_spec("openai") is not None
-HAS_ANTHROPIC = find_spec("anthropic") is not None
-HAS_BOTO3 = find_spec("boto3") is not None
 
 
 @pytest.mark.skipif(not HAS_OPENAI, reason="openai package not installed")

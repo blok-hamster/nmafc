@@ -60,7 +60,6 @@ from nmafc.integration.factory import (  # noqa: E402
     create_embedding_provider,
     create_llm_provider,
 )
-
 from scripts.benchmarks._ab_answer_type import PROMPT_B, answer_with  # noqa: E402
 from scripts.benchmarks._ab_budget import (  # noqa: E402
     PERMANENT,
@@ -363,8 +362,8 @@ def report(results, targets, controls, rows, blocked, args) -> None:
 
     print(f"\nProjection = (target fixes - target breaks) + control net scaled "
           f"by {won}/{nc}.")
-    print(f"We are 15 answers short of RAG on 839. A variant projecting under "
-          f"+8 will not close it\nand should not be run at full scale.")
+    print("We are 15 answers short of RAG on 839. A variant projecting under "
+          "+8 will not close it\nand should not be run at full scale.")
     if blocked:
         print(f"\n{len(blocked)} questions blocked by the provider")
 

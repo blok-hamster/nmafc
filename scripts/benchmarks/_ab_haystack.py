@@ -80,10 +80,6 @@ from nmafc.integration.factory import (  # noqa: E402
     create_embedding_provider,
     create_llm_provider,
 )
-
-from scripts.benchmarks.arms.rag import RagArm  # noqa: E402
-from scripts.benchmarks.datasets.locomo_loader import load_locomo  # noqa: E402
-from scripts.benchmarks.evaluation.llm_judge import judge_answer  # noqa: E402
 from scripts.benchmarks._ab_budget import (  # noqa: E402
     PERMANENT,
     SCORED,
@@ -92,6 +88,9 @@ from scripts.benchmarks._ab_budget import (  # noqa: E402
     with_retries,
 )
 from scripts.benchmarks._ab_vs_rag import report, timed_ours, timed_rag  # noqa: E402
+from scripts.benchmarks.arms.rag import RagArm  # noqa: E402
+from scripts.benchmarks.datasets.locomo_loader import load_locomo  # noqa: E402
+from scripts.benchmarks.evaluation.llm_judge import judge_answer  # noqa: E402
 
 
 async def run(args: argparse.Namespace) -> None:

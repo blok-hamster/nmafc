@@ -27,7 +27,6 @@ from nmafc.schemas.memory import DecayConfig, MemoryType
 from nmafc.storage.config import NMafcConfig, StorageConfig
 from nmafc.wrapper import NeuromorphicMemory
 
-
 CONVERSATION = [
     "Hi, I'm Marcus. I'm 34 years old and I'm a software engineer at Google.",
     "I'm severely allergic to shellfish — found out the hard way last year. Anaphylaxis, EpiPen, the whole deal.",
