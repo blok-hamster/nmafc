@@ -2,19 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import os
-from pathlib import Path
-
 import re
+from pathlib import Path
 
 from nmafc.engine.consolidation import MemoryConsolidator
 from nmafc.engine.decay import build_entity_graph, decay_all
 from nmafc.engine.linking import resolve_link_targets
-from nmafc.engine.pruning import apply_suppression, create_suppression_event, detect_override, invalidate_record, prune_cycle
+from nmafc.engine.pruning import (
+    create_suppression_event,
+    detect_override,
+    prune_cycle,
+)
 from nmafc.integration.base import EmbeddingProvider, LLMProvider
 from nmafc.integration.extractor import StateExtractor
 from nmafc.integration.query_router import QueryRouter
-from nmafc.schemas.events import EventType, MemoryEvent
-from nmafc.schemas.memory import DecayConfig, MemoryRecord, MemoryStateUpdate, UnifiedMemoryPayload
+from nmafc.schemas.memory import MemoryRecord, MemoryStateUpdate, UnifiedMemoryPayload
 from nmafc.storage.cold_base import ColdStorageBase
 from nmafc.storage.config import NMafcConfig
 from nmafc.storage.event_log import EventLog
@@ -90,8 +92,6 @@ class NeuromorphicMemory:
 
         self._config = config
         self._decay_config = config.decay
-        self._current_turn: int = 0
-
         self._hot = HotStorage(config.storage)
         if config.storage.cold_is_postgres:
             from nmafc.storage.cold_pg import PostgresColdStorage
@@ -120,6 +120,21 @@ class NeuromorphicMemory:
             agent_id=config.storage.agent_id,
             conversation_id=config.storage.conversation_id,
         )
+
+        # Resume the turn clock where the last session left it. Cold ROM is
+        # append-only and the turn counter lives only in memory, so without this
+        # a reopen restarts at 0: every existing record looks newborn, decay
+        # resets, reinforcements stamp early turns onto old records, and the
+        # archive rows ahead of the counter are judged "future" and hidden.
+        # The event log records a turn on every WEIGHT_UPDATE pass, but RETRIEVAL
+        # events and the event-less ingest path mean it is not a reliable high
+        # water mark; the archive's own max turn is.
+        self._current_turn: int = 0
+        try:
+            self._current_turn = max(0, self._cold.max_turn())
+        except Exception:
+            # A backend or archive that cannot answer should not break a reopen.
+            pass
 
     @classmethod
     def from_config(

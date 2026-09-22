@@ -242,10 +242,9 @@ async def run(args: argparse.Namespace) -> None:
           # says where each clause actually landed. Echoing the spec and then
           # the default placement reads as "commit_short on gated" for a run
           # that put it everywhere.
-          f"{', '.join(f'{c} on {w}' for c, w in args.clauses)
-             or 'no conversion rule'}")
-    print(f"      categories {args.categories or 'all'}"
-          f"{f', {args.sample} sampled per conversation' if args.sample else ''}\n")
+          f"{', '.join(f'{c} on {w}' for c, w in args.clauses)}"
+          f"{'' if args.clauses else 'no conversion rule'}")
+    print(f"      categories {args.categories or 'all'}")
 
     def checkpoint() -> None:
         out.write_text(json.dumps(rows, indent=2), encoding="utf-8")

@@ -193,6 +193,19 @@ EMBEDDING_OPTIONS = [
     ("fastembed/BAAI/bge-small-en-v1.5", "FastEmbed BGE Small (local, no API key)"),
 ]
 
+# Known output dimensions for the canned embedding choices. The wizard used to
+# write 1536 for every model, which quietly broke init for nomic-embed-text
+# (768), bge-small (384) and text-embedding-3-large (3072): the LanceDB schema
+# is fixed at first write, so the first upsert after an init with the wrong
+# dimension failed on every provider but OpenAI 3-small. Unknown models
+# fall back to 1536, matching StorageConfig's default.
+EMBEDDING_DIMS: dict[str, int] = {
+    "openai/text-embedding-3-small": 1536,
+    "openai/text-embedding-3-large": 3072,
+    "ollama/nomic-embed-text": 768,
+    "fastembed/BAAI/bge-small-en-v1.5": 384,
+}
+
 
 def cmd_init() -> None:
     """Interactive setup wizard."""
@@ -232,6 +245,7 @@ def cmd_init() -> None:
         choices=[str(i) for i in range(1, len(EMBEDDING_OPTIONS) + 1)],
     )
     embed_model = EMBEDDING_OPTIONS[int(choice) - 1][0]
+    embed_dim = EMBEDDING_DIMS.get(embed_model, 1536)
 
     # ── API Keys ──
     env_lines: list[str] = []
@@ -277,7 +291,7 @@ def cmd_init() -> None:
             new_lines.append(line)
 
     new_lines.extend([
-        f"NMAFC_EMBEDDING_DIM=1536",
+        f"NMAFC_EMBEDDING_DIM={embed_dim}",
     ])
 
     if new_lines:
@@ -318,7 +332,7 @@ unit = "turns"
 
 [embedding]
 provider_model = "{embed_model}"
-dim = 1536
+dim = {embed_dim}
 
 [llm]
 provider_model = "{llm_model}"
@@ -413,19 +427,24 @@ def cmd_chat(args: argparse.Namespace) -> None:
                 _handle_chat_command(user_input, memory, console)
                 continue
 
-            history.append({"role": "user", "content": user_input})
+            # The wrapper's extractor appends the current user_msg to the context
+            # it is given, so leaving the current turn out of history here is
+            # what stops the LLM seeing the same message twice. It is appended
+            # below once the turn has been processed, ready for the next one.
+            history_before = list(history)
 
             # Process turn
             console.print("[dim]Thinking...[/dim]", end="\r")
             try:
                 import asyncio
                 response = asyncio.run(
-                    memory.process_turn(user_input, history)
+                    memory.process_turn(user_input, history_before)
                 )
             except Exception as e:
                 console.print(f"[red]Error:[/red] {e}")
                 continue
 
+            history.append({"role": "user", "content": user_input})
             history.append({"role": "assistant", "content": response})
 
             console.print()

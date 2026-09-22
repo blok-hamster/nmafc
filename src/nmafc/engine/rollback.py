@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 from typing import Callable
 
-from nmafc.schemas.memory import DecayConfig, MemoryRecord, MemoryStateUpdate, MemoryType
 from nmafc.engine.decay import decay_record
+from nmafc.schemas.memory import DecayConfig, MemoryRecord, MemoryType
 from nmafc.storage.cold_base import ColdStorageBase
 from nmafc.storage.hot import HotStorage
 
@@ -38,18 +39,46 @@ def rebuild_hot_from_cold(
             consolidation_index=0,
             created_at_turn=event["turn"],
             last_reinforced_turn=event["turn"],
+            valid_at=event.get("valid_at"),
+            related_entities=_links_from_event(event),
         )
 
         new_weight = decay_record(record, up_to_turn, config)
         if new_weight < config.w_prune:
             continue
 
-        record = record.model_copy(update={"weight": new_weight})
+        # decay_record reads record.weight as w0 and computes the decay over the
+        # elapsed turns since last_reinforced_turn. The weight has absorbed all
+        # of that decay, so the persisted record must advance last_reinforced_turn
+        # to up_to_turn or the next decay pass charges the same span again and
+        # every rebuilt record is decayed twice -- see the contract documented on
+        # decay_record and HotStorage.apply_weight_updates.
+        record = record.model_copy(
+            update={"weight": new_weight, "last_reinforced_turn": up_to_turn}
+        )
         embedding = embed_fn(event["fact_content"])
         hot.upsert(record, embedding)
         restored += 1
 
     return restored
+
+
+def _links_from_event(event: dict) -> list[str]:
+    """Reconstruct related_entities from a Cold ROM event row.
+
+    The SQLite backend serialises the list with json.dumps; the Postgres backend
+    lacks the column entirely and yields nothing, which is the correct shape for
+    a backend that never captured links.
+    """
+    raw = event.get("related_entities")
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(link) for link in raw]
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return []
 
 
 def invalidate_event(

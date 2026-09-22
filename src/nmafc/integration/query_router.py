@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from typing import TYPE_CHECKING
 
@@ -261,9 +262,9 @@ class QueryRouter:
 
         cold_records: list[MemoryRecord] = []
         if self._config.always_search_cold:
-            cold_records = self._search_cold(query_embedding, query)
+            cold_records = self._search_cold(query_embedding, query, current_turn)
         elif not vector_hits or vector_hits[0].score < self._config.theta:
-            cold_records = self._search_cold(query_embedding, query)
+            cold_records = self._search_cold(query_embedding, query, current_turn)
 
         # --- Step 2: Build candidate lists with source tags ---
         candidates: list[SearchCandidate] = []
@@ -294,19 +295,29 @@ class QueryRouter:
             ))
 
         # --- Step 3: BFS expansion in Hot RAM (forward + reverse) ---
+        # Hop 1 also reverse-looks-up the vector-hit seeds themselves. The
+        # frontier only ever holds outbound links, so without this a record
+        # whose related_entities name a seed is a graph neighbour of that seed
+        # in every picture the entity graph draws, yet invisible to traversal
+        # from the seed's side.
+        seed_entities = list(visited_entities)
         current_hop = 0
         max_hops = self._config.max_hops
 
-        while current_hop < max_hops and frontier_entities:
+        while current_hop < max_hops:
+            if not frontier_entities and current_hop > 0:
+                break
             current_hop += 1
             unvisited = [e for e in frontier_entities if e not in visited_entities]
-            if not unvisited:
-                break
+            reverse_sources = unvisited + (seed_entities if current_hop == 1 else [])
 
             # Forward: records whose entity_name is in the frontier
             neighbors = self._hot.get_by_entities(unvisited, exclude_invalidated=exclude_inv)
-            # Reverse: records whose related_entities point to the frontier
-            reverse = self._hot.get_records_pointing_to(unvisited, exclude_invalidated=exclude_inv)
+            # Reverse: records whose related_entities point to the frontier,
+            # and on the first hop, to the vector-hit seeds themselves
+            reverse = self._hot.get_records_pointing_to(
+                reverse_sources, exclude_invalidated=exclude_inv,
+            )
             all_hop_records = {r.id: r for r in neighbors + reverse}
 
             frontier_entities = set()
@@ -329,7 +340,7 @@ class QueryRouter:
             seen_entities = {rec.entity_name.lower() for rec in
                             [c.record for c in candidates]}
             cold_only = [c.record for c in candidates if c.source.startswith("cold")]
-            expanded = self._expand_cold_graph(cold_only, seen_entities)
+            expanded = self._expand_cold_graph(cold_only, seen_entities, current_turn)
             for rank, rec in enumerate(expanded):
                 candidates.append(SearchCandidate(
                     record=rec, score=None, source="bfs_cold",
@@ -433,7 +444,7 @@ class QueryRouter:
         )
 
     def _search_cold(
-        self, query_embedding: list[float], query: str
+        self, query_embedding: list[float], query: str, current_turn: int
     ) -> list[MemoryRecord]:
         """Hybrid archive retrieval: dense first, keyword filling the remainder.
 
@@ -447,6 +458,11 @@ class QueryRouter:
         Dense results are taken first because they are ranked by meaning and
         keyword rank is not comparable to a cosine score, so there is no honest
         way to interleave the two by score.
+
+        Events recorded after `current_turn` are never returned: the archive is
+        append-only, so after a rollback it holds rows from turns that have been
+        rewound away, and returning them would smuggle the un-rewound future
+        back into the context the rollback was meant to erase.
         """
         budget = self._config.fallback_keyword_limit
         if budget <= 0:
@@ -457,6 +473,8 @@ class QueryRouter:
 
         if self._config.cold_semantic_fallback:
             for row in self._cold.semantic_search(query_embedding, limit=budget):
+                if row["turn"] > current_turn:
+                    continue
                 key = row["entity_name"].lower()
                 if key not in seen:
                     seen.add(key)
@@ -464,6 +482,8 @@ class QueryRouter:
 
         if len(records) < budget:
             for row in self._cold.keyword_search(query, limit=budget):
+                if row["turn"] > current_turn:
+                    continue
                 key = row["entity_name"].lower()
                 if key not in seen:
                     seen.add(key)
@@ -474,7 +494,7 @@ class QueryRouter:
         return records[:budget]
 
     def _expand_cold_graph(
-        self, records: list[MemoryRecord], already_seen: set[str]
+        self, records: list[MemoryRecord], already_seen: set[str], current_turn: int
     ) -> list[MemoryRecord]:
         """Follow one hop of links from archive hits, into the archive.
 
@@ -505,6 +525,8 @@ class QueryRouter:
         for row in self._cold.get_events_for_entities(
             sorted(wanted), limit=self._config.fallback_keyword_limit
         ):
+            if row["turn"] > current_turn:
+                continue
             key = row["entity_name"].lower()
             if key not in already_seen:
                 already_seen.add(key)
@@ -764,9 +786,26 @@ class QueryRouter:
         vecs = vectors() if vectors else {}
         if not vecs:
             return by_words, {}
-        # Provider vectors are unit length, so the dot product is the cosine.
-        sims = {t: sum(a * b for a, b in zip(query_vector, v))
-                for t in eligible if (v := vecs.get(t))}
+        # Cosine, not a raw dot product. The previous code relied on provider
+        # vectors being unit length; OpenAI's are, but the stored turn vectors
+        # are read back as written and the query vector is likewise unnormalised
+        # at this point, so a short query could score 0 against a long
+        # on-topic turn just by magnitude. Normalising both sides is what makes
+        # `scan_semantic_floor` a similarity threshold instead of a number with
+        # a dimension.
+        qn = math.sqrt(sum(a * a for a in query_vector))
+        if qn == 0.0:
+            return by_words, {}
+        q = [a / qn for a in query_vector]
+        sims: dict[int, float] = {}
+        for t in eligible:
+            v = vecs.get(t)
+            if not v:
+                continue
+            vn = math.sqrt(sum(b * b for b in v))
+            if vn == 0.0:
+                continue
+            sims[t] = sum(a * (b / vn) for a, b in zip(q, v))
         if not sims:
             return by_words, {}
         by_meaning = sorted(sims, key=lambda t: (-sims[t], t))

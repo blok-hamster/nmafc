@@ -83,7 +83,7 @@ class AzureOpenAIProvider(LLMProvider):
                         args = json.loads(fn.arguments)
                         payload = UnifiedMemoryPayload(**args)
                         updates.extend(payload.updates)
-                    except (json.JSONDecodeError, ValueError):
+                    except (json.JSONDecodeError, ValueError, TypeError):
                         continue
 
         return response_text, updates

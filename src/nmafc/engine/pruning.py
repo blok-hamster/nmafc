@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from nmafc.schemas.events import MemoryEvent
 from nmafc.schemas.memory import DecayConfig, MemoryRecord, MemoryStateUpdate
 from nmafc.storage.cold_base import ColdStorageBase
 from nmafc.storage.hot import HotStorage
@@ -254,14 +255,23 @@ def prune_cycle(
     invalidate_updates: list[tuple[str, int]] = []
 
     for rec in all_records:
-        if rec.weight > w_prune:
-            if rec.invalid_at is not None and rec.weight < 0.01:
+        # Already-invalidated records never decay further (decay_all skips
+        # them), so this is the only pass that can retire them. A record whose
+        # weight sat at or below ~0.01 when it was invalidated -- e.g. one
+        # suppressed by an override while already weak -- stays there in
+        # perpetuity otherwise, and invalidated rows would accumulate forever.
+        # Kept above the w_prune comparison: the retention intent is "retained
+        # for temporal queries", and a record under 0.01 has no temporal
+        # relevance left to serve.
+        if rec.invalid_at is not None:
+            if rec.weight < 0.01:
                 delete_ids.append(rec.id)
             continue
 
-        if rec.invalid_at is not None:
-            delete_ids.append(rec.id)
-        elif rec.memory_type == MemoryType.EPHEMERAL_STATE:
+        if rec.weight > w_prune:
+            continue
+
+        if rec.memory_type == MemoryType.EPHEMERAL_STATE:
             delete_ids.append(rec.id)
         else:
             invalidate_updates.append((rec.id, current_turn))

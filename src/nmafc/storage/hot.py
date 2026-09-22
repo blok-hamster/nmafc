@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Optional, TypeVar
 
 import lancedb
 import pyarrow as pa
@@ -10,6 +10,8 @@ from nmafc.schemas.memory import MemoryRecord, MemoryType, SearchResult
 from nmafc.storage.config import StorageConfig
 
 TABLE_NAME = "memory_vectors"
+
+_TResult = TypeVar("_TResult")
 
 SCHEMA = pa.schema([
     pa.field("vector", pa.list_(pa.float32(), -1)),
@@ -106,32 +108,66 @@ class HotStorage:
 
     @property
     def _scope_filter(self) -> str:
-        """WHERE clause that scopes all queries to this agent + conversation."""
-        return f"agent_id = '{self._agent_id}' AND conversation_id = '{self._conversation_id}'"
+        """WHERE clause that scopes all queries to this agent + conversation.
+
+        agent_id and conversation_id can arrive from client-controlled headers
+        (X-Agent-Id / X-Conversation-Id), so they must be escaped like any other
+        model-generated string -- an unescaped apostrophe or quote ends the
+        literal and lets one tenant query or clear another's records.
+        """
+        return (
+            f"agent_id = {_sql_str(self._agent_id)} "
+            f"AND conversation_id = {_sql_str(self._conversation_id)}"
+        )
+
+    def _retry_read(self, fn: Callable[[Any], _TResult]) -> _TResult:
+        """Run `fn(self._table)`, re-opening the table once on a Lance IO miss.
+
+        Compact-on-demand (`compact()`) replaces the fragment set a long-lived
+        handle points at. A handle opened before the compaction then fails its
+        next read with a Lance "Not found" IO error even though the dataset's
+        head is perfectly readable -- exactly what happens when a per-tenant
+        memory outlives a `settle_memory` call. Re-opening onto the head and
+        retrying once turns that transient into a successful read.
+        """
+        try:
+            return fn(self._table)
+        except Exception as exc:  # noqa: BLE001 - probing for one specific miss
+            if "Not found" not in str(exc):
+                raise
+            self._table = self._db.open_table(TABLE_NAME)
+            return fn(self._table)
 
     def upsert(self, record: MemoryRecord, embedding: list[float]) -> None:
-        existing = self._table.search().where(f"id = '{record.id}'").limit(1).to_list()
-        if existing:
-            self.delete(record.id)
+        def work(t: Any) -> None:
+            existing = (
+                t.search()
+                .where(f"{self._scope_filter} AND id = '{record.id}'")
+                .limit(1)
+                .to_list()
+            )
+            if existing:
+                t.delete(f"{self._scope_filter} AND id = '{record.id}'")
+            row = {
+                "vector": embedding,
+                "id": record.id,
+                "agent_id": self._agent_id,
+                "conversation_id": self._conversation_id,
+                "entity_name": record.entity_name,
+                "fact_content": record.fact_content,
+                "memory_type": record.memory_type.value,
+                "weight": record.weight,
+                "consolidation_index": record.consolidation_index,
+                "created_at_turn": record.created_at_turn,
+                "last_reinforced_turn": record.last_reinforced_turn,
+                "related_entities": list(record.related_entities),
+                "valid_at": record.valid_at,
+                "valid_at_text": record.valid_at_text,
+                "invalid_at": record.invalid_at,
+            }
+            t.add([row])
 
-        row = {
-            "vector": embedding,
-            "id": record.id,
-            "agent_id": self._agent_id,
-            "conversation_id": self._conversation_id,
-            "entity_name": record.entity_name,
-            "fact_content": record.fact_content,
-            "memory_type": record.memory_type.value,
-            "weight": record.weight,
-            "consolidation_index": record.consolidation_index,
-            "created_at_turn": record.created_at_turn,
-            "last_reinforced_turn": record.last_reinforced_turn,
-            "related_entities": list(record.related_entities),
-            "valid_at": record.valid_at,
-            "valid_at_text": record.valid_at_text,
-            "invalid_at": record.invalid_at,
-        }
-        self._table.add([row])
+        self._retry_read(work)
 
     def search(
         self,
@@ -149,12 +185,14 @@ class HotStorage:
         where = self._scope_filter
         if exclude_invalidated:
             where += " AND invalid_at IS NULL"
-        results = (
-            self._table.search(query_embedding)
-            .distance_type("cosine")
-            .where(where)
-            .limit(top_k)
-            .to_list()
+        results = self._retry_read(
+            lambda t: (
+                t.search(query_embedding)
+                .distance_type("cosine")
+                .where(where)
+                .limit(top_k)
+                .to_list()
+            )
         )
         search_results = []
         for row in results:
@@ -165,12 +203,13 @@ class HotStorage:
         return search_results
 
     def get_by_entity(self, entity_name: str) -> list[MemoryRecord]:
-        safe = entity_name.replace("'", "''")
-        results = (
-            self._table.search()
-            .where(f"{self._scope_filter} AND entity_name = {_sql_str(entity_name)}")
-            .limit(100)
-            .to_list()
+        results = self._retry_read(
+            lambda t: (
+                t.search()
+                .where(f"{self._scope_filter} AND entity_name = {_sql_str(entity_name)}")
+                .limit(100)
+                .to_list()
+            )
         )
         return [self._row_to_record(r) for r in results]
 
@@ -183,16 +222,23 @@ class HotStorage:
         where = f"{self._scope_filter} AND entity_name IN ({quoted})"
         if exclude_invalidated:
             where += " AND invalid_at IS NULL"
-        results = (
-            self._table.search()
-            .where(where)
-            .limit(500)
-            .to_list()
+        results = self._retry_read(
+            lambda t: (
+                t.search()
+                .where(where)
+                .limit(500)
+                .to_list()
+            )
         )
         return [self._row_to_record(r) for r in results]
 
     def update_weight(self, record_id: str, new_weight: float) -> None:
-        results = self._table.search().where(f"id = '{record_id}'").limit(1).to_list()
+        results = (
+            self._table.search()
+            .where(f"{self._scope_filter} AND id = '{record_id}'")
+            .limit(1)
+            .to_list()
+        )
         if not results:
             return
         row = results[0]
@@ -234,7 +280,12 @@ class HotStorage:
 
         weights = dict(updates)  # last write wins, as in the sequential loop
         quoted = ", ".join(f"'{record_id}'" for record_id in weights)
-        rows = self._table.search().where(f"id IN ({quoted})").limit(10000).to_list()
+        rows = (
+            self._table.search()
+            .where(f"{self._scope_filter} AND id IN ({quoted})")
+            .limit(10000)
+            .to_list()
+        )
         if not rows:
             return
 
@@ -244,7 +295,7 @@ class HotStorage:
             if decay_turn is not None:
                 row["last_reinforced_turn"] = decay_turn
 
-        self._table.delete(f"id IN ({quoted})")
+        self._table.delete(f"{self._scope_filter} AND id IN ({quoted})")
         self._table.add(rows)
 
     def delete_many(self, record_ids: list[str]) -> None:
@@ -252,11 +303,16 @@ class HotStorage:
         if not record_ids:
             return
         quoted = ", ".join(f"'{record_id}'" for record_id in set(record_ids))
-        self._table.delete(f"id IN ({quoted})")
+        self._table.delete(f"{self._scope_filter} AND id IN ({quoted})")
 
     def update_reinforcement(self, record_id: str, new_k: int, turn: int) -> None:
         """One LTP writeback. See apply_reinforcements for the clock guard."""
-        results = self._table.search().where(f"id = '{record_id}'").limit(1).to_list()
+        results = (
+            self._table.search()
+            .where(f"{self._scope_filter} AND id = '{record_id}'")
+            .limit(1)
+            .to_list()
+        )
         if not results:
             return
         row = results[0]
@@ -292,7 +348,12 @@ class HotStorage:
 
         new_ks = dict(updates)  # last write wins, as in the sequential loop
         quoted = ", ".join(f"'{record_id}'" for record_id in new_ks)
-        rows = self._table.search().where(f"id IN ({quoted})").limit(10000).to_list()
+        rows = (
+            self._table.search()
+            .where(f"{self._scope_filter} AND id IN ({quoted})")
+            .limit(10000)
+            .to_list()
+        )
         if not rows:
             return
 
@@ -302,7 +363,7 @@ class HotStorage:
             row["consolidation_index"] = new_ks[row["id"]]
             row["last_reinforced_turn"] = max(turn, row["last_reinforced_turn"])
 
-        self._table.delete(f"id IN ({quoted})")
+        self._table.delete(f"{self._scope_filter} AND id IN ({quoted})")
         self._table.add(rows)
 
     def apply_relation_updates(
@@ -320,7 +381,12 @@ class HotStorage:
 
         new_links = dict(updates)  # last write wins
         quoted = ", ".join(_sql_str(record_id) for record_id in new_links)
-        rows = self._table.search().where(f"id IN ({quoted})").limit(10000).to_list()
+        rows = (
+            self._table.search()
+            .where(f"{self._scope_filter} AND id IN ({quoted})")
+            .limit(10000)
+            .to_list()
+        )
         if not rows:
             return
 
@@ -328,7 +394,7 @@ class HotStorage:
             row.pop("_distance", None)
             row["related_entities"] = list(new_links[row["id"]])
 
-        self._table.delete(f"id IN ({quoted})")
+        self._table.delete(f"{self._scope_filter} AND id IN ({quoted})")
         self._table.add(rows)
 
     def set_invalid_at_many(self, updates: list[tuple[str, int]]) -> None:
@@ -337,14 +403,23 @@ class HotStorage:
             return
         invalidations = dict(updates)
         quoted = ", ".join(f"'{rid}'" for rid in invalidations)
-        rows = self._table.search().where(f"id IN ({quoted})").limit(10000).to_list()
-        if not rows:
-            return
-        for row in rows:
-            row.pop("_distance", None)
-            row["invalid_at"] = invalidations[row["id"]]
-        self._table.delete(f"id IN ({quoted})")
-        self._table.add(rows)
+
+        def work(t: Any) -> None:
+            rows = (
+                t.search()
+                .where(f"{self._scope_filter} AND id IN ({quoted})")
+                .limit(10000)
+                .to_list()
+            )
+            if not rows:
+                return
+            for row in rows:
+                row.pop("_distance", None)
+                row["invalid_at"] = invalidations[row["id"]]
+            t.delete(f"{self._scope_filter} AND id IN ({quoted})")
+            t.add(rows)
+
+        self._retry_read(work)
 
     def compact(self) -> bool:
         """Merge accumulated table versions back into a compact layout.
@@ -376,19 +451,23 @@ class HotStorage:
         return True
 
     def delete(self, record_id: str) -> None:
-        self._table.delete(f"id = '{record_id}'")
+        self._table.delete(f"{self._scope_filter} AND id = '{record_id}'")
 
     def get_all_mutable(self) -> list[MemoryRecord]:
-        results = (
-            self._table.search()
-            .where(f"{self._scope_filter} AND memory_type != '{MemoryType.CORE_ANCHOR.value}'")
-            .limit(10000)
-            .to_list()
+        results = self._retry_read(
+            lambda t: (
+                t.search()
+                .where(f"{self._scope_filter} AND memory_type != '{MemoryType.CORE_ANCHOR.value}'")
+                .limit(10000)
+                .to_list()
+            )
         )
         return [self._row_to_record(r) for r in results]
 
     def get_all(self) -> list[MemoryRecord]:
-        results = self._table.search().where(self._scope_filter).limit(10000).to_list()
+        results = self._retry_read(
+            lambda t: t.search().where(self._scope_filter).limit(10000).to_list()
+        )
         return [self._row_to_record(r) for r in results]
 
     def get_records_pointing_to(
@@ -426,7 +505,14 @@ class HotStorage:
         self._table.delete(self._scope_filter)
 
     def get_record(self, record_id: str) -> Optional[MemoryRecord]:
-        results = self._table.search().where(f"id = '{record_id}'").limit(1).to_list()
+        results = self._retry_read(
+            lambda t: (
+                t.search()
+                .where(f"{self._scope_filter} AND id = '{record_id}'")
+                .limit(1)
+                .to_list()
+            )
+        )
         if not results:
             return None
         return self._row_to_record(results[0])

@@ -137,8 +137,14 @@ def create_llm_provider(
         region = kwargs.pop("region", None) or os.environ.get(
             "AWS_REGION", "us-east-1"
         )
+        # The ANTHROPIC_API_KEY_BEDROCK presence must not decide which Bedrock
+        # client is built: a non-Claude model (Titan, Nova, Llama) routed into
+        # AnthropicProvider talks to Anthropic's SDK with a missing-method
+        # error. Only the model name picks the client. The key is passed to the
+        # Anthropic client when it is set; the plain Bedrock client signs with
+        # boto3 credentials and needs none.
         bedrock_api_key = api_key or os.environ.get("ANTHROPIC_API_KEY_BEDROCK")
-        if "anthropic" in model or bedrock_api_key:
+        if "anthropic" in model:
             from nmafc.integration.bedrock_provider import BedrockAnthropicProvider
 
             return BedrockAnthropicProvider(

@@ -330,3 +330,63 @@ class TestClear:
         assert hot.count() == 3
         hot.clear()
         assert hot.count() == 0
+
+
+class TestTenantIsolation:
+    """agent_id / conversation_id scoping, including id-based accessors.
+
+    These ids come from client headers in the web tier, so a tenant must never
+    be able to read, mutate, or clear another tenant's records even when it
+    knows the other tenant's record id or uses hostile ids.
+    """
+
+    def _tenant(self, tmp_path, agent: str, conv: str) -> HotStorage:
+        config = StorageConfig(
+            hot_uri=str(Path(tmp_path) / "test_lance"),
+            embedding_dim=EMBED_DIM,
+            agent_id=agent,
+            conversation_id=conv,
+        )
+        return HotStorage(config)
+
+    def test_same_lance_file_isolates_tenants(self, tmp_path):
+        a = self._tenant(tmp_path, "agent_a", "conv_a")
+        b = self._tenant(tmp_path, "agent_b", "conv_b")
+        b_rec = make_record()
+        b.upsert(b_rec, make_embedding())
+        assert a.count() == 0
+        assert b.count() == 1
+
+    def test_get_record_is_tenant_scoped(self, tmp_path):
+        a = self._tenant(tmp_path, "agent_a", "conv_a")
+        b = self._tenant(tmp_path, "agent_b", "conv_b")
+        b_rec = make_record()
+        b.upsert(b_rec, make_embedding())
+        assert a.get_record(b_rec.id) is None
+        assert b.get_record(b_rec.id) is not None
+
+    def test_delete_and_reinforce_are_tenant_scoped(self, tmp_path):
+        a = self._tenant(tmp_path, "agent_a", "conv_a")
+        b = self._tenant(tmp_path, "agent_b", "conv_b")
+        b_rec = make_record()
+        b.upsert(b_rec, make_embedding())
+        # a deleting by b's id must not touch b's record
+        a.delete(b_rec.id)
+        assert b.get_record(b_rec.id) is not None
+        # a reinforcing b's id must not touch b's record
+        a.apply_reinforcements([(b_rec.id, 5)], turn=10)
+        got = b.get_record(b_rec.id)
+        assert got is not None
+        assert got.consolidation_index == 0
+
+    def test_hostile_agent_id_is_escaped(self, tmp_path):
+        a = self._tenant(tmp_path, "agent_a", "conv_a")
+        hostile = self._tenant(
+            tmp_path, "x' OR '1'='1", "conv_b"
+        )
+        b_rec = make_record()
+        a.upsert(b_rec, make_embedding())
+        # If the hostile id were not SQL-escaped, this scan would return a's
+        # record; scoped + escaped it must return nothing.
+        assert hostile.get_all() == []
+        assert hostile.count() == 0

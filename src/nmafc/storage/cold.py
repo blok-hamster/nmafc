@@ -413,6 +413,7 @@ class ColdStorage(ColdStorageBase):
         cursor = self._conn.execute(
             """SELECT * FROM memory_event_log
                WHERE agent_id = ? AND conversation_id = ? AND is_active = 1
+                 AND invalid_at IS NULL
                ORDER BY turn ASC, id ASC""",
             (self._agent_id, self._conversation_id),
         )
@@ -422,6 +423,7 @@ class ColdStorage(ColdStorageBase):
         cursor = self._conn.execute(
             """SELECT * FROM memory_event_log
                WHERE agent_id = ? AND conversation_id = ? AND entity_name = ? AND is_active = 1
+                 AND invalid_at IS NULL
                ORDER BY turn ASC""",
             (self._agent_id, self._conversation_id, entity_name),
         )
@@ -549,6 +551,7 @@ class ColdStorage(ColdStorageBase):
             f"""SELECT * FROM memory_event_log
                 WHERE agent_id = ? AND conversation_id = ? AND is_active = 1
                   AND LOWER(entity_name) IN ({placeholders})
+                  AND invalid_at IS NULL
                 ORDER BY turn ASC, id ASC
                 LIMIT ?""",
             [self._agent_id, self._conversation_id] + names + [limit],
@@ -583,6 +586,27 @@ class ColdStorage(ColdStorageBase):
         )
         row = cursor.fetchone()
         return int(row[0]) if row else 0
+
+    def max_turn(self) -> int:
+        # The warmest source of the turn clock is the turn text table (written
+        # on every process_turn), but archives that predate it or backends that
+        # skip it fall back to the highest event turn.
+        try:
+            getter = self._conn.execute(
+                "SELECT MAX(turn) FROM turn_text WHERE agent_id = ? AND conversation_id = ?",
+                (self._agent_id, self._conversation_id),
+            )
+            row = getter.fetchone()
+            if row and row[0] is not None:
+                return int(row[0])
+        except sqlite3.OperationalError:
+            pass
+        cursor = self._conn.execute(
+            "SELECT MAX(turn) FROM memory_event_log WHERE agent_id = ? AND conversation_id = ?",
+            (self._agent_id, self._conversation_id),
+        )
+        row = cursor.fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
 
     def close(self) -> None:
         self._conn.close()

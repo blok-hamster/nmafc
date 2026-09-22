@@ -4,9 +4,8 @@ from pathlib import Path
 import pytest
 
 from nmafc.integration.base import EmbeddingProvider, LLMProvider
-from nmafc.schemas.memory import MemoryStateUpdate, MemoryType
+from nmafc.schemas.memory import DecayConfig, MemoryStateUpdate, MemoryType
 from nmafc.storage.config import NMafcConfig, StorageConfig
-from nmafc.schemas.memory import DecayConfig
 from nmafc.wrapper import NeuromorphicMemory
 
 EMBED_DIM = 8
@@ -219,3 +218,44 @@ async def test_cold_rom_preserves_all_events(setup):
 
     cold_stats = memory.get_cold_stats()
     assert cold_stats["total_events"] == 5
+
+
+@pytest.mark.asyncio
+async def test_turn_counter_survives_reopen(setup):
+    """Regression: the wrapper's turn clock lived only in memory, so a reopen
+    restarted at 0. Every existing record then looked newborn, decay reset for
+    them, reinforcements stamped early turns back onto old records, and the
+    archive rows ahead of the counter were judged "future" and hidden from
+    retrieval (which broke rollback bounding). The counter must resume from the
+    archive's max turn."""
+    memory, llm = setup
+    llm.add_response(
+        "ok",
+        [
+            MemoryStateUpdate(
+                entity_name="name",
+                fact_content="Amara",
+                memory_type=MemoryType.CORE_ANCHOR,
+            )
+        ],
+    )
+    await memory.process_turn("my name is Amara")
+    assert memory.current_turn == 1
+
+    config = memory._config
+    reopened = NeuromorphicMemory(
+        llm_provider=llm,
+        embedding_provider=MockEmbedder(),
+        config=config,
+    )
+    assert reopened.current_turn == 1
+    assert reopened._hot.count() == 1
+
+    await reopened.process_turn("hello again")
+    assert reopened.current_turn == 2
+
+    # The reopened record must not be treated as newborn: next-turn decay is a
+    # single elapsed turn, not the whole conversation again.
+    rec = reopened._hot.get_by_entity("name")[0]
+    assert rec.created_at_turn == 1
+    assert rec.last_reinforced_turn in (1, 2)

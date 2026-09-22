@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+import json
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
 
 from nmafc.engine.decay import build_entity_graph, clustering_coefficient
+from nmafc.schemas.memory import MemoryRecord
 from nmafc.web.deps import get_tenant_memory
 from nmafc.wrapper import NeuromorphicMemory
 
@@ -15,10 +17,51 @@ router = APIRouter(prefix="/api/graph", tags=["graph"])
 MemDep = Annotated[NeuromorphicMemory, Depends(get_tenant_memory())]
 
 
+def _cold_row_to_record(row: dict[str, Any]) -> MemoryRecord:
+    related = row.get("related_entities")
+    if isinstance(related, str):
+        try:
+            related = json.loads(related)
+        except (TypeError, ValueError):
+            related = []
+    return MemoryRecord(
+        entity_name=row["entity_name"],
+        fact_content=row["fact_content"],
+        memory_type=row["memory_type"],
+        created_at_turn=row["turn"],
+        last_reinforced_turn=row["turn"],
+        related_entities=list(related or []),
+    )
+
+
+def _cold_only_records(mem: NeuromorphicMemory, hot_entities: set[str]) -> list[MemoryRecord]:
+    """Active archive facts whose entity has no Hot RAM record.
+
+    The entity graph reads Hot RAM, but traversal expands one hop into the
+    archive, so a pruned entity can still be a live node in the graph the
+    router walks. Mirroring that here keeps the picture the UI draws and the
+    reachable set from diverging.
+    """
+    cold = getattr(mem, "_cold", None)
+    if cold is None:
+        return []
+    try:
+        rows = cold.get_active_events()
+    except AttributeError:
+        return []
+    return [
+        _cold_row_to_record(row)
+        for row in rows
+        if str(row.get("entity_name", "")).lower() not in hot_entities
+    ]
+
+
 @router.get("")
 def get_entity_graph(mem: MemDep):
     """Full entity graph: nodes with metadata, edges from related_entities."""
     records = mem._hot.get_all()
+    hot_entities = {r.entity_name.lower() for r in records}
+    records = records + _cold_only_records(mem, hot_entities)
     if not records:
         return {"nodes": [], "edges": []}
 
@@ -66,6 +109,8 @@ def get_entity_graph(mem: MemDep):
 def get_entity_detail(entity_name: str, mem: MemDep):
     """Single entity: records, clustering coefficient, neighbors."""
     records = mem._hot.get_all()
+    hot_entities = {r.entity_name.lower() for r in records}
+    records = records + _cold_only_records(mem, hot_entities)
     if not records:
         return {"error": "No records in Hot RAM"}
 

@@ -78,5 +78,12 @@ class ColdStorageBase(ABC):
     @abstractmethod
     def count_total(self) -> int: ...
 
+    # The most advanced turn this tenant has recorded, so a wrapper reopening
+    # the store can resume its turn counter where it left off instead of
+    # restarting at 0 and decaying everything as newborn. 0 when the archive is
+    # empty or the backend keeps no turn information.
+    def max_turn(self) -> int:
+        return 0
+
     @abstractmethod
     def close(self) -> None: ...

@@ -70,6 +70,9 @@ select = ["E", "F", "I", "N", "W"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "live: requires live provider credentials and makes paid API calls (skipped by default)",
+]
 
 [tool.pyrefly]
 search_path = ["."]

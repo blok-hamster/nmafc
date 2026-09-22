@@ -188,6 +188,25 @@ class TestCreateBedrockProvider:
 
         assert isinstance(provider, BedrockAnthropicProvider)
 
+    def test_bedrock_non_claude_ignores_anthropic_key(self, monkeypatch):
+        """Regression: a Bedrock Anthropic key must not route a non-Claude
+        model into the Anthropic SDK. Pre-fix, `if "anthropic" in model or
+        bedrock_api_key` sent titanium/Llama deployments to
+        BedrockAnthropicProvider whenever ANTHROPIC_API_KEY_BEDROCK was set,
+        so the extraction path called an SDK the model does not serve."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY_BEDROCK", "absktest_123")
+        from nmafc.integration.bedrock_provider import BedrockProvider
+
+        provider = create_llm_provider("bedrock/amazon.nova-pro-v1:0")
+        assert isinstance(provider, BedrockProvider)
+
+    def test_bedrock_claude_still_uses_anthropic_ctrl(self, monkeypatch):
+        monkeypatch.delenv("ANTHROPIC_API_KEY_BEDROCK", raising=False)
+        from nmafc.integration.bedrock_provider import BedrockAnthropicProvider
+
+        provider = create_llm_provider("bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0")
+        assert isinstance(provider, BedrockAnthropicProvider)
+
 
 class TestNMafcConfigProviderFields:
     def test_defaults(self):

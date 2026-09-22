@@ -47,6 +47,8 @@ class PostgresColdStorage(ColdStorageBase):
                     memory_type TEXT NOT NULL,
                     overrides_entity TEXT,
                     is_active BOOLEAN DEFAULT TRUE,
+                    valid_at INTEGER,
+                    invalid_at INTEGER,
                     search_vector TSVECTOR GENERATED ALWAYS AS (
                         to_tsvector('english', entity_name || ' ' || fact_content)
                     ) STORED
@@ -71,6 +73,7 @@ class PostgresColdStorage(ColdStorageBase):
         update: MemoryStateUpdate,
         turn: int,
         embedding: list[float] | None = None,
+        valid_at: int | None = None,
     ) -> int:
         """Append one immutable event.
 
@@ -81,12 +84,19 @@ class PostgresColdStorage(ColdStorageBase):
         this backend inherits ColdStorageBase.semantic_search, which returns
         nothing, so the router falls back to keyword search alone -- the
         behaviour every backend had before dense fallback existed.
+
+        `valid_at` records the turn at which the update takes effect and is
+        persisted; an update can be scheduled forwards but that alone does not
+        suppress the superseded fact until override handling runs, mirroring
+        the SQLite backend.
         """
+        if not isinstance(update, MemoryStateUpdate):
+            raise TypeError("update must be a MemoryStateUpdate instance")
         with self._conn.cursor() as cur:
             cur.execute(
                 """INSERT INTO memory_event_log
-                   (agent_id, conversation_id, timestamp, turn, entity_name, fact_content, memory_type, overrides_entity)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                   (agent_id, conversation_id, timestamp, turn, entity_name, fact_content, memory_type, overrides_entity, valid_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
                     self._agent_id,
@@ -97,6 +107,7 @@ class PostgresColdStorage(ColdStorageBase):
                     update.fact_content,
                     update.memory_type.value,
                     update.overrides_entity,
+                    valid_at,
                 ),
             )
             row = cur.fetchone()
@@ -114,13 +125,34 @@ class PostgresColdStorage(ColdStorageBase):
             )
         self._conn.commit()
 
+    def invalidate_facts(self, facts: list[tuple[str, str, int]]) -> int:
+        """Set invalid_at on active events matching the superseded facts.
+
+        Mirrors ColdStorage.invalidate_facts: only rows with no invalid_at yet
+        are updated, so the earliest supersession wins.
+        """
+        count = 0
+        with self._conn.cursor() as cur:
+            for entity_name, fact_content, turn in facts:
+                cur.execute(
+                    """UPDATE memory_event_log SET invalid_at = %s
+                       WHERE agent_id = %s AND conversation_id = %s
+                         AND entity_name = %s AND fact_content = %s
+                         AND is_active = TRUE AND invalid_at IS NULL""",
+                    (turn, self._agent_id, self._conversation_id, entity_name, fact_content),
+                )
+                count += cur.rowcount
+        self._conn.commit()
+        return count
+
     def get_active_events(self) -> list[dict[str, Any]]:
         with self._conn.cursor() as cur:
             cur.execute(
                 """SELECT id, timestamp, turn, entity_name, fact_content,
-                          memory_type, overrides_entity, is_active
+                          memory_type, overrides_entity, is_active, valid_at, invalid_at
                    FROM memory_event_log
                    WHERE agent_id = %s AND conversation_id = %s AND is_active = TRUE
+                     AND invalid_at IS NULL
                    ORDER BY turn ASC, id ASC""",
                 (self._agent_id, self._conversation_id),
             )
@@ -133,9 +165,10 @@ class PostgresColdStorage(ColdStorageBase):
         with self._conn.cursor() as cur:
             cur.execute(
                 """SELECT id, timestamp, turn, entity_name, fact_content,
-                          memory_type, overrides_entity, is_active
+                          memory_type, overrides_entity, is_active, valid_at, invalid_at
                    FROM memory_event_log
                    WHERE agent_id = %s AND conversation_id = %s AND entity_name = %s AND is_active = TRUE
+                     AND invalid_at IS NULL
                    ORDER BY turn ASC""",
                 (self._agent_id, self._conversation_id, entity_name),
             )
@@ -151,11 +184,11 @@ class PostgresColdStorage(ColdStorageBase):
         with self._conn.cursor() as cur:
             cur.execute(
                 """SELECT id, timestamp, turn, entity_name, fact_content,
-                          memory_type, overrides_entity, is_active
+                          memory_type, overrides_entity, is_active, valid_at, invalid_at
                    FROM memory_event_log
                    WHERE agent_id = %s AND conversation_id = %s
                      AND search_vector @@ plainto_tsquery('english', %s)
-                     AND is_active = TRUE
+                     AND is_active = TRUE AND invalid_at IS NULL
                    ORDER BY ts_rank(search_vector, plainto_tsquery('english', %s)) DESC
                    LIMIT %s""",
                 (self._agent_id, self._conversation_id, sanitized, sanitized, limit),
@@ -184,6 +217,16 @@ class PostgresColdStorage(ColdStorageBase):
         with self._conn.cursor() as cur:
             cur.execute(
                 "SELECT COUNT(*) FROM memory_event_log WHERE agent_id = %s AND conversation_id = %s",
+                (self._agent_id, self._conversation_id),
+            )
+            row = cur.fetchone()
+            return int(row[0]) if row else 0
+
+    def max_turn(self) -> int:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(MAX(turn), 0) FROM memory_event_log "
+                "WHERE agent_id = %s AND conversation_id = %s",
                 (self._agent_id, self._conversation_id),
             )
             row = cur.fetchone()

@@ -18,6 +18,7 @@ except ImportError:
     pass
 
 
+@pytest.mark.live
 @pytest.mark.asyncio
 async def test_azure_deepseek_v4_pro_live():
     """Live smoke test against an Azure-hosted DeepSeek deployment.
@@ -35,6 +36,10 @@ async def test_azure_deepseek_v4_pro_live():
     if not endpoint or not key:
         pytest.skip(
             "Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY to run this test"
+        )
+    if os.environ.get("NMAFC_RUN_LIVE") != "1":
+        pytest.skip(
+            "Live test: set NMAFC_RUN_LIVE=1 to run (makes paid API calls)"
         )
 
     llm = OpenAIProvider(model=model, api_key=key, base_url=endpoint)
