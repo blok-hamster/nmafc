@@ -1615,10 +1615,10 @@ python -m scripts.benchmarks.visualize   --input scripts/benchmarks/results/loco
 
 ```bash
 # Install benchmark dependencies
-uv pip install -e ".[bench,llm,aws]"
+uv pip install -e ".[bench,llm,aws]" -e ".[dev]"
 
-# Tests use pytest-asyncio; without it the async tests error out instead of running
-uv pip install pytest-asyncio
+# (pytest-asyncio ships via the dev group; without it async tests error out
+#  instead of running, so the coverage is silently absent.)
 
 # Embeddings: Azure text-embedding-3-small (1536-dim) via .env, or locally:
 #   ollama serve && ollama pull nomic-embed-text
@@ -1825,21 +1825,32 @@ nmafc/
 ## Testing
 
 ```bash
-# pytest-asyncio is REQUIRED -- without it the async tests do not fail loudly,
-# they error out as "async def functions are not natively supported" and the
-# coverage they were meant to provide is silently absent.
-pip install pytest-asyncio
+# Test tooling (pytest, pytest-asyncio, ruff, mypy) and all runtime extras;
+# pytest-asyncio is REQUIRED -- without it async tests error out instead of
+# running and the coverage they provide is silently absent.
+uv sync --extra all        # extras (llm/aws/postgres/web/bench) + dev group
 
-# Run all tests
-pytest
+# Run all tests (unit + integration)
+uv run pytest
 
 # Run specific test categories
-pytest tests/test_decay.py -v
-pytest tests/test_wrapper_e2e.py -v
+uv run pytest tests/unit -v
+uv run pytest tests/integration -v
+uv run pytest tests/unit/test_decay.py -v
+uv run pytest tests/integration/test_wrapper_e2e.py -v
 
-# Run with coverage
-pytest --cov=nmafc
+# Live tests (Azure Bedrock/OpenAI) are marked `live` and default to skipped;
+# enable them only with real provider credentials in .env:
+NMAFC_RUN_LIVE=1 uv run pytest tests/integration/test_azure_deepseek.py -v
+
+# Lint + typecheck
+uv run ruff check .
+uv run mypy src/nmafc
 ```
+
+The suite is network-free by default: no provider calls, no model calls — the
+only live test (`test_azure_deepseek.py`) is skipped unless `NMAFC_RUN_LIVE=1`
+is set.
 
 ## Performance Notes
 
