@@ -228,14 +228,55 @@ class QueryRouter:
     ) -> list[MemoryRecord]:
         """Retrieve relevant memories using unified parallel search + reranking.
 
+        Mutating path: applies LTP reinforcement and emits RETRIEVAL events.
+        See `_search`, which carries the shared core.
+        """
+        records, _ = await self._search(
+            query, current_turn, event_logger=event_logger, read_only=False
+        )
+        return records
+
+    async def retrieve_readonly(
+        self,
+        query: str,
+        current_turn: int,
+        *,
+        top_k: int | None = None,
+    ) -> tuple[list[MemoryRecord], dict[str, tuple[float | None, str, int]]]:
+        """Retrieve without mutating the store.
+
+        Skips LTP reinforcement (neither writes nor buffers) and emits no
+        retrieval events: a `recall()` must never change what it reads. Returns
+        the records together with their provenance -- a parallel list of
+        (score, source, hop_distance) in the same order -- so callers can
+        render raw hits without re-deriving the ranking.
+        """
+        return await self._search(
+            query, current_turn, event_logger=None, read_only=True, top_k=top_k
+        )
+
+    async def _search(
+        self,
+        query: str,
+        current_turn: int,
+        *,
+        event_logger: EventLog | None,
+        read_only: bool,
+        top_k: int | None = None,
+    ) -> tuple[list[MemoryRecord], dict[str, tuple[float | None, str, int]]]:
+        """Shared retrieval core.
+
         1. Searches Hot RAM (vector, top_k) and Cold ROM (semantic + keyword) in parallel.
         2. Traverses graph pointers (related_entities) up to max_hops in Hot RAM.
         3. Expands one hop into the Cold ROM archive from cold-only seeds.
         4. Reranks all candidates via Reciprocal Rank Fusion (RRF).
-        5. Applies LTP reinforcement to Hot-sourced records that survive reranking.
+        5. Applies LTP reinforcement to Hot-sourced records that survive reranking
+           (skipped when `read_only`, so a recall never writes or buffers).
+        6. Emits RETRIEVAL events when `event_logger` is provided (skipped when
+           `read_only`).
 
-        When `event_logger` is provided, RETRIEVAL events are emitted for each
-        record retrieved, capturing the score and hop distance.
+        `top_k` bounds the returned list after reranking. Returns the records
+        plus a provenance map: record id -> (score, source, hop_distance).
         """
         from nmafc.engine.reranking import rerank
 
@@ -270,7 +311,6 @@ class QueryRouter:
         candidates: list[SearchCandidate] = []
         visited_ids: set[str] = set()
         visited_entities: set[str] = set()
-        record_meta: dict[str, tuple[float | None, int]] = {}
 
         # Hot RAM vector hits (Hop 0)
         frontier_entities: set[str] = set()
@@ -283,7 +323,6 @@ class QueryRouter:
                     record=rec, score=hit.score, source="hot_vector",
                     rank_in_source=rank, hop_distance=0,
                 ))
-                record_meta[rec.id] = (hit.score, 0)
                 for rel in rec.related_entities:
                     frontier_entities.add(rel.lower())
 
@@ -330,7 +369,6 @@ class QueryRouter:
                         record=rec, score=None, source="bfs_hot",
                         rank_in_source=0, hop_distance=current_hop,
                     ))
-                    record_meta[rec.id] = (None, current_hop)
                     for rel in rec.related_entities:
                         if rel.lower() not in visited_entities:
                             frontier_entities.add(rel.lower())
@@ -354,8 +392,25 @@ class QueryRouter:
         # --- Step 5: Rerank all candidates ---
         final_records = rerank(candidates, self._config, current_turn,
                                grounding=grounding)
+        if top_k is not None:
+            final_records = final_records[:top_k]
+
+        # Provenance for every returned record, keyed by object identity:
+        # archived rows carry no Hot RAM id (they are rebuilt fresh per search),
+        # so hot and cold candidates can mix None ids and a string-keyed map
+        # would silently collapse them.
+        provenance_by_obj = {
+            id(c.record): (c.score, c.source, c.hop_distance)
+            for c in candidates
+        }
+        provenance = [
+            provenance_by_obj.get(id(rec), (None, "unknown", 0))
+            for rec in final_records
+        ]
 
         # --- Step 6: LTP reinforcement (Hot-sourced records only) ---
+        # Skipped entirely on a read-only recall: reinforcement writes or
+        # buffers to the store, and a read must not change what it reads.
         hot_ids = visited_ids
         reinforcements: list[tuple[str, int]] = []
         for rec in final_records:
@@ -365,47 +420,48 @@ class QueryRouter:
                     (reinforced.id, reinforced.consolidation_index)
                 )
 
-        if self._config.defer_reinforcement_writes:
-            # Buffer instead of writing, and count from the buffer rather than
-            # from `reinforcements`. Every index in that list was computed from
-            # a record just read out of the store, and while writes are held
-            # back the store still says k = 0, so a record retrieved three times
-            # would be handed k = 1 three times over. Once a record is buffered
-            # the buffer is the authority on its index, so each further
-            # retrieval adds one to what is already held -- matching the
-            # immediate path, where the increment reads the value the previous
-            # retrieval wrote.
-            #
-            # The turn stamp is the latest retrieval's, which is what the
-            # immediate path would have written for the records touched last;
-            # earlier buffered records get a stamp later than the retrieval that
-            # earned it, and that is the accuracy this trade gives up. It is
-            # read only by decay, so flushing before any decay pass bounds the
-            # difference by the flush interval.
-            for record_id, new_k in reinforcements:
-                held = self._pending_reinforcements.get(record_id)
-                self._pending_reinforcements[record_id] = (
-                    new_k if held is None else held + 1
-                )
-            self._pending_turn = max(self._pending_turn, current_turn)
-            # A caller that only ever retrieves reaches none of the three
-            # flush points -- decay, maintain, close -- so without a bound the
-            # buffer grows for the life of the process and the reinforcement it
-            # holds is never visible to anything. The bound turns "written on
-            # every query" into "written every few dozen queries", which is
-            # where the saving comes from, while keeping the buffer finite and
-            # its staleness capped at a known number of records.
-            if len(self._pending_reinforcements) >= self._config.reinforcement_buffer_limit:
-                self.flush_reinforcements()
-        else:
-            self._hot.apply_reinforcements(reinforcements, turn=current_turn)
+        if not read_only and reinforcements:
+            if self._config.defer_reinforcement_writes:
+                # Buffer instead of writing, and count from the buffer rather
+                # than from `reinforcements`. Every index in that list was
+                # computed from a record just read out of the store, and while
+                # writes are held back the store still says k = 0, so a record
+                # retrieved three times would be handed k = 1 three times over.
+                # Once a record is buffered the buffer is the authority on its
+                # index, so each further retrieval adds one to what is already
+                # held -- matching the immediate path, where the increment
+                # reads the value the previous retrieval wrote.
+                #
+                # The turn stamp is the latest retrieval's, which is what the
+                # immediate path would have written for the records touched
+                # last; earlier buffered records get a stamp later than the
+                # retrieval that earned it, and that is the accuracy this trade
+                # gives up. It is read only by decay, so flushing before any
+                # decay pass bounds the difference by the flush interval.
+                for record_id, new_k in reinforcements:
+                    held = self._pending_reinforcements.get(record_id)
+                    self._pending_reinforcements[record_id] = (
+                        new_k if held is None else held + 1
+                    )
+                self._pending_turn = max(self._pending_turn, current_turn)
+                # A caller that only ever retrieves reaches none of the three
+                # flush points -- decay, maintain, close -- so without a bound
+                # the buffer grows for the life of the process and the
+                # reinforcement it holds is never visible to anything. The
+                # bound turns "written on every query" into "written every few
+                # dozen queries", which is where the saving comes from, while
+                # keeping the buffer finite and its staleness capped at a known
+                # number of records.
+                if len(self._pending_reinforcements) >= self._config.reinforcement_buffer_limit:
+                    self.flush_reinforcements()
+            else:
+                self._hot.apply_reinforcements(reinforcements, turn=current_turn)
 
-        # Emit RETRIEVAL events
-        if event_logger is not None:
+        # Emit RETRIEVAL events (never on a read-only recall)
+        if not read_only and event_logger is not None:
             from nmafc.schemas.events import EventType, MemoryEvent
 
-            for rec in final_records:
-                score, hops = record_meta.get(rec.id, (None, 0))
+            for rec, (score, _, hops) in zip(final_records, provenance):
                 event_logger.log(
                     MemoryEvent(
                         event_type=EventType.RETRIEVAL,
@@ -417,7 +473,7 @@ class QueryRouter:
                     )
                 )
 
-        return final_records
+        return final_records, provenance
 
     @staticmethod
     def _cold_row_to_record(row: dict) -> MemoryRecord:
@@ -468,6 +524,13 @@ class QueryRouter:
         if budget <= 0:
             return []
 
+        # Full tombstoned entities are closed lines: no live Hot RAM record.
+        # Their archive rows were superseded or forgotten, and serving one as a
+        # current fact would be exactly the stale-fact resurrection the
+        # invalidation exists to suppress. Entities with a live record keep
+        # their history -- that is the overridden-but-replaced case.
+        tombstoned = self._hot.tombstoned_entities()
+
         records: list[MemoryRecord] = []
         seen: set[str] = set()
 
@@ -476,20 +539,22 @@ class QueryRouter:
                 if row["turn"] > current_turn:
                     continue
                 key = row["entity_name"].lower()
-                if key not in seen:
-                    seen.add(key)
-                    records.append(self._cold_row_to_record(row))
+                if key in tombstoned or key in seen:
+                    continue
+                seen.add(key)
+                records.append(self._cold_row_to_record(row))
 
         if len(records) < budget:
             for row in self._cold.keyword_search(query, limit=budget):
                 if row["turn"] > current_turn:
                     continue
                 key = row["entity_name"].lower()
-                if key not in seen:
-                    seen.add(key)
-                    records.append(self._cold_row_to_record(row))
-                    if len(records) >= budget:
-                        break
+                if key in tombstoned or key in seen:
+                    continue
+                seen.add(key)
+                records.append(self._cold_row_to_record(row))
+                if len(records) >= budget:
+                    break
 
         return records[:budget]
 
@@ -522,15 +587,17 @@ class QueryRouter:
             return []
 
         found: list[MemoryRecord] = []
+        tombstoned = self._hot.tombstoned_entities()
         for row in self._cold.get_events_for_entities(
             sorted(wanted), limit=self._config.fallback_keyword_limit
         ):
             if row["turn"] > current_turn:
                 continue
             key = row["entity_name"].lower()
-            if key not in already_seen:
-                already_seen.add(key)
-                found.append(self._cold_row_to_record(row))
+            if key in tombstoned or key in already_seen:
+                continue
+            already_seen.add(key)
+            found.append(self._cold_row_to_record(row))
         return found
 
     def format_context(self, records: list[MemoryRecord],

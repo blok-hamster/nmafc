@@ -1,9 +1,13 @@
-"""Unified NMAFC CLI — start, init, chat.
+"""Unified NMAFC CLI — start, init, chat, eval.
 
 Usage:
     nmafc start [--port PORT] [--config CONFIG] [--production]
     nmafc init
     nmafc chat [--config CONFIG] [--llm PROVIDER_MODEL]
+    nmafc eval locomo run -- <run_locomo flags...>
+    nmafc eval locomo summarise --run DIR [--baseline DIR]
+    nmafc eval locomo regenerate
+    nmafc eval locomo methodology
 """
 
 from __future__ import annotations
@@ -16,7 +20,7 @@ import sys
 from pathlib import Path
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="nmafc",
         description="NMAFC — Neuromorphic Memory Architecture for Conversational AI",
@@ -41,7 +45,60 @@ def main() -> None:
     chat_p.add_argument("--llm", default=None, help="Override LLM provider/model")
     chat_p.add_argument("--embedding", default=None, help="Override embedding provider/model")
 
-    args = parser.parse_args()
+    # ── eval locomo ──
+    eval_p = sub.add_parser(
+        "eval",
+        help="Benchmark harness (run / summarise / regenerate the LoCoMo results)",
+    )
+    eval_sub = eval_p.add_subparsers(dest="eval_command")
+    eval_sub.required = True
+
+    locomo_p = eval_sub.add_parser(
+        "locomo",
+        help="LoCoMo benchmark: run, summarise, regenerate, or show the methodology",
+    )
+    locomo_sub = locomo_p.add_subparsers(dest="locomo_command")
+    locomo_sub.required = True
+
+    run_p = locomo_sub.add_parser(
+        "run",
+        help="Run the LoCoMo benchmark suite (live LLM/extraction calls; costs money)",
+    )
+    run_p.add_argument(
+        "extra",
+        nargs=argparse.REMAINDER,
+        help=(
+            "Flags passed verbatim to scripts/benchmarks/run_locomo.py. Put a '--' "
+            "before them so optional flags are not re-parsed here. Common knobs also "
+            "come from the environment: NMAFC_BENCH_PROVIDER, NMAFC_BENCH_JUDGE, "
+            "NMAFC_BENCH_EMBEDDING, NMAFC_BENCH_CONCURRENCY, NMAFC_BENCH_MAX_HOPS, "
+            "NMAFC_BENCH_BETA. Example: "
+            "nmafc eval locomo run -- --arms raw,rag --conversations 2 --skip-judge"
+        ),
+    )
+
+    summ_p = locomo_sub.add_parser(
+        "summarise",
+        help="Table + paired McNemar from a completed run directory (no API calls)",
+    )
+    summ_p.add_argument(
+        "--run",
+        required=True,
+        help="Run directory holding results.json",
+    )
+    summ_p.add_argument(
+        "--baseline",
+        default=None,
+        help="Earlier run directory for paired McNemar comparison",
+    )
+
+    locomo_sub.add_parser(
+        "regenerate",
+        help="Reproduce the README results table from the committed JSON. No API calls.",
+    )
+    locomo_sub.add_parser("methodology", help="Print the paired-run methodology")
+
+    args = parser.parse_args(argv)
 
     if args.command == "start":
         cmd_start(args)
@@ -49,6 +106,8 @@ def main() -> None:
         cmd_init()
     elif args.command == "chat":
         cmd_chat(args)
+    elif args.command == "eval":
+        cmd_eval(args)
     else:
         parser.print_help()
 
@@ -342,6 +401,38 @@ provider_model = "{llm_model}"
     config_path.write_text(config_content)
     console.print(f"[green]Wrote {config_path}[/green]")
 
+    # ── Smoke turn ──
+    # Prove the keys just collected actually work before declaring setup done.
+    # A failure here is a warning, never a hard error: the config is written
+    # and the wizard's job is finished even if the network is down.
+    console.print("\n[bold]Smoke test[/bold]")
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+
+        from nmafc.storage.config import NMafcConfig
+        from nmafc.wrapper import NeuromorphicMemory
+
+        cfg = NMafcConfig.from_env_or_toml(config_path)
+        memory = NeuromorphicMemory.from_config(config=cfg)
+        try:
+            import asyncio
+            response = asyncio.run(
+                memory.process_turn("Reply with just: ok")
+            )
+            console.print(
+                f"  [green]ok[/green] — got a reply "
+                f"({len(response)} chars)"
+            )
+        finally:
+            memory.close()
+    except Exception as e:
+        console.print(
+            f"  [yellow]skipped[/yellow] — {e}\n"
+            "  [dim]Config was written; check your keys and run "
+            "`nmafc chat` to retry.[/dim]"
+        )
+
     # ── Done ──
     console.print(Panel.fit(
         "[bold green]Setup complete![/bold green]\n\n"
@@ -351,7 +442,14 @@ provider_model = "{llm_model}"
         "Next steps:\n"
         "  [bold]nmafc start[/bold]              — launch backend + frontend\n"
         "  [bold]nmafc chat[/bold]               — interactive terminal chat\n"
-        "  [bold]nmafc chat --llm ollama/llama3[/bold] — use a different model",
+        "  [bold]nmafc chat --llm ollama/llama3[/bold] — use a different model\n\n"
+        "Three-line integration:\n"
+        "  [cyan]from nmafc.wrapper import NeuromorphicMemory[/cyan]\n"
+        "  [cyan]memory = NeuromorphicMemory.from_env()[/cyan]\n"
+        "  [cyan]"
+        "await memory.remember([{\"role\": \"user\", \"content\": \"...\"}]) "
+        "# then memory.recall(\"?...\")"
+        "[/cyan]",
         border_style="green",
     ))
 
@@ -545,6 +643,133 @@ def _handle_chat_command(cmd: str, memory: object, console: object) -> None:
 
     else:
         console.print(f"[red]Unknown command: {command}[/red]")
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  nmafc eval locomo — the reproducibility harness
+# ═══════════════════════════════════════════════════════════════════
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+LOCALOMO_SCRIPT = "scripts/benchmarks/run_locomo.py"
+LOCALOMO_SUMMARISE = "scripts/benchmarks/_summarise_locomo.py"
+COMMITTED_SUMMARISE = "scripts/benchmarks/results/paired_2026_09_10/summarise.py"
+
+LOCALOMO_METHODOLOGY = """\
+LoCoMo paired-run methodology (every README figure is reproducible)
+
+Design
+------
+Both arms answer every question in one window against the same persisted
+stores, and each row in the committed JSON carries both predictions ("ours"
+and "rag" on the same row). That pairing is the whole point: McNemar exact is
+only valid when the discordant pairs are compared, and a design that runs two
+arms separately and subtracts the totals cannot supply it. On 1,985 questions
+the arms agree 1,473 times; the 512 disagreements are the entire evidence.
+
+Reproduce the README table
+--------------------------
+Run from the repository root:
+    python scripts/benchmarks/results/paired_2026_09_10/summarise.py
+    -- or, with a repo checkout of the installed package --
+    nmafc eval locomo regenerate
+
+No API calls, no store access, pure standard library. Every figure in the
+README results section comes out of that command.
+
+Run a fresh paired benchmark
+----------------------------
+    nmafc eval locomo run -- --arms raw,rag,neuromorphic --judge bedrock/...
+
+Runs hands every arm the same QA pairs, same sessions, same window against
+persisted stores written under <output>/stores/, and emits results.json with
+per-question rows. A second arm set / rerun is then summarised paired:
+
+    nmafc eval locomo summarise --run <new-run-dir> --baseline <committed-dir>
+
+Scoring denominators
+--------------------
+LoCoMo ships 1,986 QA pairs in five categories; 'adversarial' is excluded by
+every published comparison (Mem0, Zep, MemMachine) because 444 of its 446
+gold answers are ordinary facts with a real answer, so a truthful 'not
+mentioned' is marked wrong. Both denominators are printed.
+
+Known costs
+-----------
+run_locomo.py is a live-LLM benchmark. It checkpoints per conversation and
+per ingest-exchange so interrupted runs resume instead of re-burning
+extraction calls. Measured quota saturates near 9 concurrent conversations.
+"""
+
+
+def cmd_eval(args: argparse.Namespace) -> None:
+    """Dispatch `nmafc eval <subcommand>`."""
+    if args.eval_command != "locomo":
+        sys.stderr.write(f"Unknown eval command: {args.eval_command}\n")
+        sys.exit(2)
+
+    if args.locomo_command == "methodology":
+        print(LOCALOMO_METHODOLOGY)
+        return
+
+    root = _REPO_ROOT
+
+    if args.locomo_command == "run":
+        script = root / LOCALOMO_SCRIPT
+        if not script.exists():
+            sys.stderr.write(
+                f"run_locomo.py not found at {script}.\n"
+                "The pointer and reproducibility harness ship with a repo "
+                "checkout ('git clone ...'). The wheel intentionally excludes "
+                "the live-LLM benchmark sources.\n"
+            )
+            sys.exit(1)
+        extra = (list(args.extra) if args.extra else [])
+        if extra and extra[0] == "--":
+            extra = extra[1:]
+        cmd = [str(script)] + extra
+        status = _run([sys.executable, *cmd], cwd=root)
+        sys.exit(status)
+
+    if args.locomo_command == "summarise":
+        script = root / LOCALOMO_SUMMARISE
+        if not script.exists():
+            sys.stderr.write(
+                f"summarise script not found at {script}.\n"
+                "Run from a repo checkout.\n"
+            )
+            sys.exit(1)
+        cmd = [str(script), "--run", args.run]
+        if args.baseline:
+            cmd += ["--baseline", args.baseline]
+        status = _run([sys.executable, *cmd], cwd=root)
+        sys.exit(status)
+
+    if args.locomo_command == "regenerate":
+        script = root / COMMITTED_SUMMARISE
+        if not script.exists():
+            sys.stderr.write(
+                f"committed summarise.py not found at {script}.\n"
+                "The committed per-question JSON lives in the repo under "
+                "scripts/benchmarks/results/paired_2026_09_10/. Clone the repo "
+                "to regenerate the README table.\n"
+            )
+            sys.exit(1)
+        status = _run([sys.executable, str(script)], cwd=root)
+        sys.exit(status)
+
+    sys.stderr.write(f"Unknown locomo command: {args.locomo_command}\n")
+    sys.exit(2)
+
+
+def _run(argv: list[str], cwd: Path) -> int:
+    """Run an external command and wait, exiting clearly on failure."""
+    try:
+        proc = subprocess.run(argv, cwd=str(cwd), check=False)
+    except FileNotFoundError as exc:
+        sys.stderr.write(f"Failed to run {argv[0]}: {exc}\n")
+        return 1
+    return proc.returncode
 
 
 if __name__ == "__main__":

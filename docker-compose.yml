@@ -1,0 +1,63 @@
+# NMAFC one-container demo.
+#
+#   docker compose up
+#
+# Serves the exported dashboard and the full API (+ /v1/memories, MCP/docs
+# surfaces) on http://localhost:8000. Memory state lives in ./data (LanceDB is
+# embedded — no external store needed) so the volume is the whole state.
+#
+# Optional pgvector Cold ROM:
+#
+#   docker compose --profile pgvector up
+#   NMAFC_COLD_URI=postgres://nmafc:nmafc@postgres:5432/nmafc \
+#     docker compose up --profile pgvector --no-deps api
+#
+# The api image does not bundle psycopg2; to use a remote Cold ROM give it the
+# postgres extra instead: change the Dockerfile pip line to '.[web,postgres]'.
+
+name: nmafc
+
+services:
+  api:
+    build: .
+    image: nmafc:latest
+    container_name: nmafc
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      NMAFC_CONFIG_PATH: /app/configs/default.toml
+      NMAFC_STATIC_UI_DIR: /app/web-ui/out
+      # Time-to-first-memory is zero-config with any provider the SDKs know
+      # about. Common overrides, all optional:
+      # NMAFC_LLM_PROVIDER_MODEL: openai/gpt-4o-mini
+      # NMAFC_EMBEDDING_PROVIDER_MODEL: openai/text-embedding-3-small
+      # NMAFC_API_KEYS: demo-key,another-key   (Bearer gate for /v1/memories)
+      # OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    profiles: ["pgvector"]
+    container_name: nmafc-pgvector
+    environment:
+      POSTGRES_USER: nmafc
+      POSTGRES_PASSWORD: nmafc
+      POSTGRES_DB: nmafc
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nmafc"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

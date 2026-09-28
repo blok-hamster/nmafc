@@ -35,6 +35,9 @@ cli = [
     "rich>=13.0",
     "python-dotenv>=1.0",
 ]
+mcp = [
+    "mcp<2",
+]
 bench = [
     "huggingface-hub>=0.20",
     "pandas>=2.0",
@@ -42,11 +45,12 @@ bench = [
     "kaleido>=0.2.1",
     "rouge-score>=0.1.2",
 ]
-all = ["nmafc[llm,aws,postgres,bench,web,cli]"]
+all = ["nmafc[llm,aws,postgres,bench,web,cli,mcp]"]
 
 [project.scripts]
 nmafc = "nmafc.cli:main"
 nmafc-web = "nmafc.web.app:main"
+nmafc-mcp = "nmafc.mcp_server:main"
 
 [dependency-groups]
 dev = [

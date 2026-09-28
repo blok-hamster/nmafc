@@ -16,7 +16,14 @@ from nmafc.engine.pruning import (
 from nmafc.integration.base import EmbeddingProvider, LLMProvider
 from nmafc.integration.extractor import StateExtractor
 from nmafc.integration.query_router import QueryRouter
-from nmafc.schemas.memory import MemoryRecord, MemoryStateUpdate, UnifiedMemoryPayload
+from nmafc.schemas.memory import (
+    MemoryHit,
+    MemoryRecord,
+    MemoryStateUpdate,
+    RecallResult,
+    RememberResult,
+    UnifiedMemoryPayload,
+)
 from nmafc.storage.cold_base import ColdStorageBase
 from nmafc.storage.config import NMafcConfig
 from nmafc.storage.event_log import EventLog
@@ -158,6 +165,31 @@ class NeuromorphicMemory:
         embedder = create_embedding_provider(config.embedding_provider_model)
         return cls(llm_provider=llm, embedding_provider=embedder, config=config)
 
+    @classmethod
+    def from_env(
+        cls, config_path: str | Path | None = None,
+    ) -> NeuromorphicMemory:
+        """Build a fully-configured instance from environment variables.
+
+        Pass `config_path` to load defaults from a TOML file first; when None,
+        only environment variables are read, with library defaults for
+        anything unset.
+        """
+        config = NMafcConfig.from_env_or_toml(config_path)
+        return cls.from_config(config=config)
+
+    @classmethod
+    def from_openai(cls) -> NeuromorphicMemory:
+        """Convenience constructor wired to OpenAI with no config file needed.
+
+        Uses `gpt-4o-mini` for extraction and `text-embedding-3-small` for
+        embeddings; both read `OPENAI_API_KEY` from the environment.
+        """
+        config = NMafcConfig.from_env_or_toml(None)
+        config.llm_provider_model = "openai/gpt-4o-mini"
+        config.embedding_provider_model = "openai/text-embedding-3-small"
+        return cls.from_config(config=config)
+
     @property
     def current_turn(self) -> int:
         return self._current_turn
@@ -222,6 +254,224 @@ class NeuromorphicMemory:
 
         return response_text
 
+    def _resolve_tenant(
+        self,
+        agent_id: str | None,
+        conversation_id: str | None,
+    ) -> tuple[str, str]:
+        """Confirm requested tenant scope matches the store this instance holds.
+
+        Hot RAM, Cold ROM and the event log are all opened against one
+        agent/conversation at construction, so accepting a different scope here
+        would label results with a tenant they were not read from. Defaults to
+        the configured scope; a caller wanting another tenant builds another
+        instance (see `nmafc.web.deps.get_memory`).
+        """
+        bound_agent = self._config.storage.agent_id
+        bound_conv = self._config.storage.conversation_id
+        agent = agent_id if agent_id is not None else bound_agent
+        conv = conversation_id if conversation_id is not None else bound_conv
+        if (agent, conv) != (bound_agent, bound_conv):
+            raise ValueError(
+                "This memory instance is bound to agent_id="
+                f"{bound_agent!r}, conversation_id={bound_conv!r}; it cannot "
+                f"serve agent_id={agent!r}, conversation_id={conv!r}. "
+                "Build a NeuromorphicMemory per tenant instead "
+                "(see nmafc.web.deps.get_memory)."
+            )
+        return agent, conv
+
+    async def recall(
+        self,
+        query: str,
+        *,
+        agent_id: str | None = None,
+        conversation_id: str | None = None,
+        top_k: int | None = None,
+        turn: int | None = None,
+    ) -> RecallResult:
+        """Retrieve relevant memories for a query without changing anything.
+
+        1. Validate tenant scope against this instance's store.
+        2. Rerank cached facts for relevance (read-only retrieval).
+        3. Format a bounded context string plus the raw scored hits.
+
+        The retrieval neither writes nor buffers reinforcement and emits no
+        retrieval events: a recall never mutates the store it reads. Nothing is
+        ingested, decayed, pruned, or consolidated here.
+        """
+        agent, conv = self._resolve_tenant(agent_id, conversation_id)
+        at_turn = turn if turn is not None else self._current_turn
+
+        records, provenance = await self._router.retrieve_readonly(
+            query, at_turn, top_k=top_k,
+        )
+        context = self._router.format_context(records, query)
+
+        hits = [
+            MemoryHit(
+                id=rec.id,
+                entity_name=rec.entity_name,
+                fact_content=rec.fact_content,
+                memory_type=rec.memory_type,
+                score=score,
+                source=source,
+                hop_distance=hops,
+            )
+            for rec, (score, source, hops) in zip(records, provenance)
+        ]
+
+        return RecallResult(
+            query=query,
+            context=context,
+            hits=hits,
+            token_estimate=max(1, len(context) // 4) if context else 0,
+            turn=at_turn,
+            agent_id=agent,
+            conversation_id=conv,
+        )
+
+    def _split_transcript(
+        self, messages: list[dict]
+    ) -> tuple[str, list[dict]] | None:
+        """Split a chat transcript into the turn to store and prior context.
+
+        The most recent user message is the turn; everything before it is
+        history passed to the extractor alongside it. Returns None when the
+        transcript holds no user message, which callers treat as a no-op rather
+        than an error: an empty, aborted, or assistant-only transcript carries
+        nothing to remember and is not the caller's mistake.
+        """
+        for idx in range(len(messages) - 1, -1, -1):
+            if messages[idx].get("role") == "user":
+                prior = list(messages[:idx])
+                user_msg = str(messages[idx].get("content") or "")
+                if not user_msg.strip():
+                    return None
+                return user_msg, prior
+        return None
+
+    async def remember(
+        self,
+        messages: list[dict],
+        *,
+        agent_id: str | None = None,
+        conversation_id: str | None = None,
+        occurred_at: str | None = None,
+    ) -> RememberResult:
+        """Store what a transcript said, without generating a reply.
+
+        Runs the extractor in extract-only mode, then the same ingest path as
+        a chat turn: log to Cold ROM, detect and suppress overrides, upsert to
+        Hot RAM, decay, prune, and consolidate on schedule. No response text is
+        produced -- answering is the caller's job -- and an unusable transcript
+        returns an empty result rather than raising.
+        """
+        agent, conv = self._resolve_tenant(agent_id, conversation_id)
+        split = self._split_transcript(messages)
+        if split is None:
+            return RememberResult(
+                turn=self._current_turn,
+                agent_id=agent,
+                conversation_id=conv,
+            )
+
+        user_msg, history = split
+
+        # Retrieve read-only: what a past turn said must not reinforce the
+        # records already there before it is even stored.
+        records, _ = await self._router.retrieve_readonly(
+            user_msg, self._current_turn + 1,
+        )
+        memory_context = self._router.format_context(records, user_msg)
+
+        _, payload = await self._extractor.extract(
+            user_msg=user_msg,
+            context=history,
+            memory_context=memory_context or None,
+            generate_response=False,
+        )
+
+        if not payload.updates:
+            # Nothing worth storing: no turn is consumed, so a later remember
+            # or chat turn is not stamped with a turn that never happened.
+            return RememberResult(
+                turn=self._current_turn,
+                agent_id=agent,
+                conversation_id=conv,
+            )
+
+        self._current_turn += 1
+        self._record_turn_date(occurred_at)
+        self._record_turn_text(user_msg)
+        suppressed = await self._process_updates(payload)
+        self._run_decay()
+        prune_cycle(
+            self._hot, self._cold, self._decay_config.w_prune,
+            self._current_turn, event_logger=self._event_log,
+            config=self._decay_config,
+        )
+
+        auto_interval = getattr(self._decay_config, "auto_consolidate_turns", 5)
+        consolidated = False
+        if auto_interval > 0 and self._current_turn % auto_interval == 0:
+            self._consolidator.consolidate(
+                self._current_turn, event_logger=self._event_log,
+            )
+            consolidated = True
+
+        return RememberResult(
+            turn=self._current_turn,
+            updates_ingested=len(payload.updates),
+            overrides_suppressed=suppressed,
+            agent_id=agent,
+            conversation_id=conv,
+            consolidated=consolidated,
+        )
+
+    async def forget_entity(
+        self,
+        entity_name: str,
+        *,
+        agent_id: str | None = None,
+        conversation_id: str | None = None,
+    ) -> int:
+        """Close every active record for one entity within this tenant's scope.
+
+        Forgetting is temporal invalidation, not destruction: the active Hot RAM
+        vectors are stamped invalid at the current turn and their history stays
+        in Cold ROM, exactly as an override does. Returns how many records were
+        invalidated (0 when nothing active matched).
+        """
+        agent, conv = self._resolve_tenant(agent_id, conversation_id)
+        active = [r for r in self._hot.get_by_entity(entity_name) if r.invalid_at is None]
+        if not active:
+            return 0
+        self._current_turn += 1
+        self._hot.set_invalid_at_many([(r.id, self._current_turn) for r in active])
+        return len(active)
+
+    async def forget_record(
+        self,
+        record_id: str,
+        *,
+        agent_id: str | None = None,
+        conversation_id: str | None = None,
+    ) -> bool:
+        """Close a single record within this tenant's scope, history preserved.
+
+        The temporal invalidation contract, applied to one record instead of a
+        whole entity. Returns False when the record does not exist or is already
+        invalidated, so callers can report a clean miss.
+        """
+        self._resolve_tenant(agent_id, conversation_id)
+        record = self._hot.get_record(record_id)
+        if record is None or record.invalid_at is not None:
+            return False
+        self._current_turn += 1
+        self._hot.set_invalid_at_many([(record_id, self._current_turn)])
+        return True
+
     async def ingest_updates(
         self,
         updates: list[MemoryStateUpdate],
@@ -285,11 +535,18 @@ class NeuromorphicMemory:
         if callable(recorder):
             recorder(self._current_turn, text)
 
-    async def _process_updates(self, payload: UnifiedMemoryPayload) -> None:
-        """Process extracted memory updates: log, suppress overrides, upsert."""
+    async def _process_updates(self, payload: UnifiedMemoryPayload) -> int:
+        """Process extracted memory updates: log, suppress overrides, upsert.
+
+        Returns the number of superseded records suppressed by overrides, so
+        callers can report how much was displaced rather than only how much was
+        added.
+        """
         updates = payload.updates
         if not updates:
-            return
+            return 0
+
+        suppressed = 0
 
         # Embed the whole turn in one request. Every provider's embed() takes a
         # list and sends it as a single HTTP body (Azure and OpenAI batch up to
@@ -360,6 +617,7 @@ class NeuromorphicMemory:
                      self._current_turn)
                     for old_record in overrides
                 ])
+                suppressed += len(overrides)
                 for old_record in overrides:
                     self._event_log.log(
                         create_suppression_event(
@@ -395,6 +653,8 @@ class NeuromorphicMemory:
                 valid_at_text=(update.valid_at or None),
             )
             self._hot.upsert(record, embedding)
+
+        return suppressed
 
     def _run_decay(self) -> None:
         """Apply decay to all mutable records in Hot RAM."""
@@ -576,6 +836,59 @@ class SyncNeuromorphicMemory:
 
     def ingest_updates_sync(self, updates: list[MemoryStateUpdate]) -> None:
         asyncio.run(self._memory.ingest_updates(updates))
+
+    def recall(
+        self,
+        query: str,
+        *,
+        agent_id: str | None = None,
+        conversation_id: str | None = None,
+        top_k: int | None = None,
+        turn: int | None = None,
+    ) -> RecallResult:
+        """Sync variant of `NeuromorphicMemory.recall`."""
+        return asyncio.run(self._memory.recall(
+            query, agent_id=agent_id, conversation_id=conversation_id,
+            top_k=top_k, turn=turn,
+        ))
+
+    def remember(
+        self,
+        messages: list[dict],
+        *,
+        agent_id: str | None = None,
+        conversation_id: str | None = None,
+        occurred_at: str | None = None,
+    ) -> RememberResult:
+        """Sync variant of `NeuromorphicMemory.remember`."""
+        return asyncio.run(self._memory.remember(
+            messages, agent_id=agent_id, conversation_id=conversation_id,
+            occurred_at=occurred_at,
+        ))
+
+    def forget_entity(
+        self,
+        entity_name: str,
+        *,
+        agent_id: str | None = None,
+        conversation_id: str | None = None,
+    ) -> int:
+        """Sync variant of `NeuromorphicMemory.forget_entity`."""
+        return asyncio.run(self._memory.forget_entity(
+            entity_name, agent_id=agent_id, conversation_id=conversation_id,
+        ))
+
+    def forget_record(
+        self,
+        record_id: str,
+        *,
+        agent_id: str | None = None,
+        conversation_id: str | None = None,
+    ) -> bool:
+        """Sync variant of `NeuromorphicMemory.forget_record`."""
+        return asyncio.run(self._memory.forget_record(
+            record_id, agent_id=agent_id, conversation_id=conversation_id,
+        ))
 
     def consolidate_sync(self) -> int:
         return asyncio.run(self._memory.consolidate())

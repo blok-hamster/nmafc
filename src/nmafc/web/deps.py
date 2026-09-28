@@ -7,9 +7,10 @@ by the same base config but isolated in Hot RAM, Cold ROM, and Event Log.
 
 from __future__ import annotations
 
+import os
 from typing import Annotated
 
-from fastapi import Header
+from fastapi import Header, HTTPException
 
 from nmafc.wrapper import NeuromorphicMemory
 
@@ -61,6 +62,32 @@ async def _get_memory_dependency(
 def get_tenant_memory():
     """Return the FastAPI dependency callable for tenant-scoped memory."""
     return _get_memory_dependency
+
+
+def require_api_key(
+    authorization: Annotated[str | None, Header()] = None,
+) -> None:
+    """Bearer-key gate for the machine-facing REST API.
+
+    Keys are the comma-separated `NMAFC_API_KEYS` values, or a single
+    `NMAFC_API_KEY`; the `nmafc_` prefix is conventional but not enforced.
+    When no keys are configured the gate is open, so a local, single-tenant
+    deployment stays zero-config -- the same shape as the web UI's.
+    """
+    keys = [
+        k.strip()
+        for k in os.environ.get("NMAFC_API_KEYS", "").split(",")
+        if k.strip()
+    ]
+    if single := os.environ.get("NMAFC_API_KEY", "").strip():
+        keys.append(single)
+    if not keys:
+        return
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or token.strip() not in keys:
+        raise HTTPException(status_code=401, detail="Invalid API key")
 
 
 def shutdown_all() -> None:

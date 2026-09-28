@@ -112,8 +112,18 @@ class NMafcConfig(BaseModel):
         )
 
     @classmethod
-    def from_env_or_toml(cls, toml_path: str | Path = "configs/default.toml") -> NMafcConfig:
-        config = cls.from_toml(toml_path) if Path(toml_path).exists() else cls()
+    def from_env_or_toml(cls, toml_path: str | Path | None = "configs/default.toml") -> NMafcConfig:
+        """Build config from a TOML file (if present) then overlay the environment.
+
+        `toml_path=None` skips the file entirely: environment over library
+        defaults only, which is what `from_env`/`from_openai` want when no
+        config directory has been set up.
+        """
+        config = (
+            cls.from_toml(toml_path)
+            if toml_path is not None and Path(toml_path).exists()
+            else cls()
+        )
 
         if hot_uri := os.environ.get("NMAFC_HOT_URI"):
             config.storage.hot_uri = hot_uri

@@ -112,6 +112,49 @@ class SearchCandidate(BaseModel):
     hop_distance: int = Field(default=0, ge=0)
 
 
+class MemoryHit(BaseModel):
+    """One retrieved memory as exposed to callers, with its provenance."""
+
+    id: Optional[str] = None
+    entity_name: str
+    fact_content: str
+    memory_type: MemoryType
+    score: Optional[float] = None
+    source: str = ""
+    hop_distance: int = 0
+
+
+class RecallResult(BaseModel):
+    """Bounded, read-only snapshot of what the store answers for a query."""
+
+    query: str
+    context: str = Field(description="Formatted memory context string, bounded by top_k")
+    hits: list[MemoryHit] = Field(default_factory=list)
+    token_estimate: int = Field(
+        default=0,
+        description="Approximate token count of the context string (chars / 4)",
+    )
+    turn: int = Field(default=0, description="Turn the recall was executed as of")
+    agent_id: str = "default"
+    conversation_id: str = "default"
+
+
+class RememberResult(BaseModel):
+    """Outcome of storing one transcript's facts (`remember`).
+
+    `updates_ingested` is how many facts were written, `overrides_suppressed`
+    how many older records were displaced by them, and `consolidated` whether
+    this turn also triggered the scheduled consolidation pass.
+    """
+
+    turn: int
+    updates_ingested: int = 0
+    overrides_suppressed: int = 0
+    agent_id: str = "default"
+    conversation_id: str = "default"
+    consolidated: bool = False
+
+
 
 class DecayConfig(BaseModel):
     """All tunable hyperparameters for the cognitive decay engine."""

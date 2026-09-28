@@ -444,6 +444,28 @@ nmafc start --production
 
 The Next.js frontend proxies `/api/*` and `/ws/*` requests to the backend — zero frontend config needed. Just start both and open port 3000.
 
+### One-command demo (Docker)
+
+The whole demo — dashboard + API + `/v1/memories` + MCP docs — serves from **one port**
+in one container. LanceDB is embedded, so `./data` is the only state; no database,
+no build, no Ollama required to boot (embedding/LLM providers are configured by
+env var at first use).
+
+```bash
+docker compose up
+# open http://localhost:8000 — dashboard, /docs, and the JSON API all here
+```
+
+The container builds the dashboard itself (`next build` with `output: export`,
+served by the FastAPI process that already owns `/api`), so `docker compose up`
+reproduces it identically on a clean machine. Point providers at anything the
+SDKs know about via `NMAFC_LLM_PROVIDER_MODEL` / `NMAFC_EMBEDDING_PROVIDER_MODEL`
+(+ `OPENAI_API_KEY` etc.).
+
+Optional Cold-ROM store with real vectors: `docker compose --profile pgvector up`
+starts a persistent pgvector service; give the API `NMAFC_COLD_URI=postgres://...`
+to use it (add the `postgres` extra in the Dockerfile: `pip install '.[web,postgres]'`).
+
 ### WebSocket Live Updates
 
 The frontend connects to `/ws/live` and receives real-time broadcasts:
@@ -543,6 +565,35 @@ with SyncNeuromorphicMemory.from_config() as mem:
     print(response)
     print(mem.get_hot_stats())
 ```
+
+### Drop-in OpenAI middleware (memory without changing your app)
+
+Wrap your existing OpenAI/AsyncOpenAI client so every completion is enriched
+with recalled memories and the finished conversation is remembered — no
+changes to your calls, streaming included:
+
+```python
+from openai import OpenAI
+from nmafc.proxy import MemoryOpenAI
+
+client = MemoryOpenAI(NeuromorphicMemory.from_env(), client=OpenAI())
+reply = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "What's my dog's name?"}],
+)
+print(reply.choices[0].message.content)
+
+# or the one-line HTTP variant: point OpenAI(base_url=...) at
+# `nmafc-web` and POST /v1/chat/completions — send agent_id /
+# conversation_id in the body for tenant scoping.
+```
+
+`MemoryOpenAI` interposes only on `chat.completions.create`: it recalls the
+last user message, injects hits as a system preamble (`## Relevant memories`),
+forwards the request, then `remember()`s the transcript — before the reply for
+non-stream calls, after the stream is exhausted for `stream=True`. Pass
+`memory_agent_id`, `memory_conversation_id`, `memory_remember=False`, or
+`memory_recall=False` to control memory on a per-call basis.
 
 ### Available Methods
 
@@ -819,6 +870,29 @@ every comparison below is paired and McNemar exact applies directly to it rather
 than to two runs subtracted from each other. Answering
 `azure_v1/DeepSeek-V4-Pro`, embeddings `azure_v1/text-embedding-3-small`, judge
 `azure_v1/Kimi-K2.6`.
+
+#### Reproducing every figure in this section
+
+The per-question JSON is committed (`scripts/benchmarks/results/paired_2026_09_10/`),
+so none of these numbers need be taken on trust. Regenerate the whole table with
+no API calls, no store access, and no dependencies beyond the standard library:
+
+```
+nmafc eval locomo regenerate
+```
+
+or, directly:
+
+```
+python scripts/benchmarks/results/paired_2026_09_10/summarise.py
+```
+
+`nmafc eval locomo` is the reproducibility harness: `run` wraps
+`scripts/benchmarks/run_locomo.py` (a live-LLM benchmark that checkpoints per
+conversation and per ingest-exchange so interrupted runs resume), `summarise`
+turns a fresh run directory into the same tables plus a paired McNemar against
+any baseline, and `methodology` prints the design. See `nmafc eval locomo
+methodology` for the full paired-run method and its known costs.
 
 #### Which questions are scored
 

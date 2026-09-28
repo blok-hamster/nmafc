@@ -421,6 +421,33 @@ class HotStorage:
 
         self._retry_read(work)
 
+    def tombstoned_entities(self) -> set[str]:
+        """Entities whose every active record is invalidated.
+
+        A supersession normally leaves a newer active record behind, so the
+        entity still has a live line in Hot RAM and only the old record is
+        closed. A `forget` closes the last one. The archive holds both cases,
+        and a fallback search that resurrects either defeats the invalidation:
+        an overwritten fact coming back as though it were still true is the
+        stale-fact failure this design exists to stop. So the set is
+        invalidated-minus-active: entities that are fully tombstoned count;
+        entities with at least one live record do not, and keep their history.
+        """
+        rows = self._retry_read(
+            lambda t: t.search().where(self._scope_filter).limit(10000).to_list()
+        )
+        active: set[str] = set()
+        invalidated: set[str] = set()
+        for r in rows:
+            entity = r.get("entity_name")
+            if entity is None:
+                continue
+            if r.get("invalid_at") is None:
+                active.add(entity)
+            else:
+                invalidated.add(entity)
+        return invalidated - active
+
     def compact(self) -> bool:
         """Merge accumulated table versions back into a compact layout.
 

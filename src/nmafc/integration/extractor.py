@@ -170,6 +170,7 @@ class StateExtractor:
         user_msg: str,
         context: list[dict] | None = None,
         memory_context: str | None = None,
+        generate_response: bool = True,
     ) -> tuple[str, UnifiedMemoryPayload]:
         """Process a user message and extract memory updates.
 
@@ -177,6 +178,10 @@ class StateExtractor:
             user_msg: The user's message text.
             context: Prior conversation messages.
             memory_context: Formatted string of retrieved memories to inject.
+            generate_response: When False, run in extract-only mode: the model
+                must not produce any conversational reply, and the returned
+                response text is the empty string. Used by `remember`, which
+                stores what a turn said without answering it.
 
         Returns:
             Tuple of (assistant_response, unified_memory_payload)
@@ -185,6 +190,13 @@ class StateExtractor:
         messages.append({"role": "user", "content": user_msg})
 
         system = self._system_prompt
+        if not generate_response:
+            system += (
+                "\n\n## Extract-Only Mode:\n"
+                "Do NOT produce a conversational response. Do not answer the "
+                "user. Call `update_memory` with the facts to store and return "
+                "nothing else."
+            )
         if memory_context:
             system += f"\n\n## Currently Active Memories:\n{memory_context}"
 
@@ -192,5 +204,8 @@ class StateExtractor:
             messages=messages,
             system_prompt=system,
         )
+
+        if not generate_response:
+            response_text = ""
 
         return response_text, UnifiedMemoryPayload(updates=updates)
