@@ -48,6 +48,11 @@ def sanitize_entity_name(name: str) -> str:
     return name
 
 
+def _name_parts(name: str) -> frozenset[str]:
+    """Tokenise an entity name into underscore-separated parts for overlap matching."""
+    return frozenset(p for p in name.lower().split("_") if p)
+
+
 class NeuromorphicMemory:
     """Top-level neuromorphic memory wrapper for LLM agents.
 
@@ -193,6 +198,40 @@ class NeuromorphicMemory:
     @property
     def current_turn(self) -> int:
         return self._current_turn
+
+    def _resolve_entity_name(self, entity_name: str) -> str | None:
+        """Resolve a new entity name against existing Hot RAM entities.
+
+        If a stored entity's name token-overlaps with the new name at >= 0.7,
+        return the stored canonical name. Otherwise return None.
+        Threshold is higher than link matching (0.5) because merging entities
+        is more consequential than resolving a link.
+        """
+        if not entity_name:
+            return None
+        existing = self._hot.get_all()
+        if not existing:
+            return None
+        wanted = _name_parts(entity_name)
+        if not wanted:
+            return None
+        best_score = 0.0
+        best_name: str | None = None
+        for rec in existing:
+            candidate = rec.entity_name
+            if candidate.lower() == entity_name.lower():
+                return candidate
+            candidate_parts = _name_parts(candidate)
+            shared = len(wanted & candidate_parts)
+            if not shared:
+                continue
+            score = shared / len(wanted | candidate_parts)
+            if score > best_score:
+                best_score = score
+                best_name = candidate
+        if best_score >= 0.7:
+            return best_name
+        return None
 
     async def process_turn(
         self,
@@ -583,6 +622,16 @@ class NeuromorphicMemory:
 
         for update, embedding in zip(updates, embeddings):
             update.entity_name = sanitize_entity_name(update.entity_name)
+            # Resolve the new entity name against existing entities so facts
+            # about the same concept merge into one node instead of spawning
+            # duplicate orphans. When a match is found, adopt the canonical
+            # name and point overrides_entity at the old name so prior records
+            # under it get superseded.
+            resolved = self._resolve_entity_name(update.entity_name)
+            if resolved is not None and resolved != update.entity_name:
+                if update.overrides_entity is None:
+                    update.overrides_entity = update.entity_name
+                update.entity_name = resolved
             if update.overrides_entity:
                 update.overrides_entity = sanitize_entity_name(update.overrides_entity)
             update.related_entities = [sanitize_entity_name(r) for r in update.related_entities]
