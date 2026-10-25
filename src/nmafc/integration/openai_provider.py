@@ -145,7 +145,15 @@ class OpenAIProvider(LLMProvider):
         extra: dict[str, Any] = {}
         if self._temperature is not None:
             extra["temperature"] = self._temperature
+        # OpenRouter defaults max_tokens to (model context - prompt tokens),
+        # which on large-output models reserves hundreds of thousands of
+        # tokens of credit per call and can trip in-flight/credit checks.
+        # A small explicit cap keeps the hold proportional to the ask.
+        max_tokens = os.environ.get("NMAFC_LLM_MAX_TOKENS")
+        if max_tokens:
+            extra["max_tokens"] = int(max_tokens)
 
+        empties = 0
         for attempt in range(10):
             try:
                 response: Any = await self._client.chat.completions.create(
@@ -153,7 +161,15 @@ class OpenAIProvider(LLMProvider):
                     messages=cast(Any, full_messages),
                     **extra,
                 )
-                return response.choices[0].message.content or ""
+                content: str = response.choices[0].message.content or ""
+                if content.strip() or empties >= 3:
+                    return content
+                # Some OpenRouter upstream routes return HTTP 200 with empty
+                # content (~10-20% of calls observed). A retry usually lands
+                # on a healthy route, so treat empty like any other failure.
+                empties += 1
+                await asyncio.sleep(min(5.0, 0.5 * (2.0 ** attempt)))
+                continue
             except Exception as exc:
                 if attempt == 9:
                     raise exc
