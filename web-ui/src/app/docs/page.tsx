@@ -272,7 +272,7 @@ nmafc chat --llm "groq/llama-3.1-70b-versatile"`}
 from nmafc.wrapper import NeuromorphicMemory
 
 async def main():
-    async with await NeuromorphicMemory.from_config() as mem:
+    async with NeuromorphicMemory.from_config() as mem:
         response = await mem.process_turn("My name is Alice")
         print(response)
 
@@ -556,7 +556,7 @@ function LibraryUsage() {
 from nmafc.wrapper import NeuromorphicMemory
 
 async def main():
-    async with await NeuromorphicMemory.from_config() as mem:
+    async with NeuromorphicMemory.from_config() as mem:
         # Full pipeline: retrieve + LLM + extract + decay + prune
         response = await mem.process_turn("I'm allergic to peanuts")
 

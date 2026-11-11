@@ -43,7 +43,7 @@ async def main():
     llm = MyLLMProvider()
     embedder = MyEmbeddingProvider()
 
-    async with await NeuromorphicMemory.from_providers(
+    async with NeuromorphicMemory.from_providers(
         llm_provider=llm,
         embedding_provider=embedder,
     ) as mem:

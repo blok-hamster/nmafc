@@ -14,7 +14,7 @@ from nmafc import NeuromorphicMemory
 
 
 async def main():
-    async with await NeuromorphicMemory.from_config() as mem:
+    async with NeuromorphicMemory.from_config() as mem:
         # Turn 1: Store a fact
         response = await mem.process_turn(
             "My name is Alice and I'm a software engineer."

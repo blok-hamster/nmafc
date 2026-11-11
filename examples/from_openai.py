@@ -18,7 +18,7 @@ from nmafc import NeuromorphicMemory, NmafcError
 
 async def main():
     try:
-        async with await NeuromorphicMemory.from_openai() as mem:
+        async with NeuromorphicMemory.from_openai() as mem:
             stored = await mem.remember([
                 {"role": "user", "content": "I'm allergic to shellfish."},
             ])

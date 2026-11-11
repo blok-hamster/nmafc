@@ -20,7 +20,7 @@ from nmafc.proxy import MemoryOpenAI
 
 
 async def main():
-    mem = await NeuromorphicMemory.from_openai()
+    mem = NeuromorphicMemory.from_openai()
     client = MemoryOpenAI(mem, client=AsyncOpenAI())
 
     # Recall is injected automatically as a system preamble, then the

@@ -573,7 +573,7 @@ import asyncio
 from nmafc.wrapper import NeuromorphicMemory
 
 async def main():
-    async with await NeuromorphicMemory.from_config() as mem:
+    async with NeuromorphicMemory.from_config() as mem:
         response = await mem.process_turn("My name is Alice")
         print(response)
         print(mem.get_hot_stats())

@@ -19,7 +19,7 @@ from nmafc.wrapper import NeuromorphicMemory
 
 
 async def main():
-    async with await NeuromorphicMemory.from_config() as mem:
+    async with NeuromorphicMemory.from_config() as mem:
         # ── Bootstrap facts ──
         print("=== Injecting initial facts ===")
         await mem.ingest_updates([

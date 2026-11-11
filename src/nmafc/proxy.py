@@ -7,7 +7,7 @@ interposes only on `chat.completions.create`:
     from nmafc.wrapper import NeuromorphicMemory
     from openai import AsyncOpenAI
 
-    memory = await NeuromorphicMemory.from_env()  # or from_config(...)
+    memory = NeuromorphicMemory.from_env()  # or from_config(...)
     client = MemoryOpenAI(memory, client=AsyncOpenAI())
 
     completion = await client.chat.completions.create(

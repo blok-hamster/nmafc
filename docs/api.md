@@ -31,9 +31,14 @@ reason to call `__init__` directly.
 | `from_env(config_path=None)` | Env vars decide everything (optionally pre-loaded from a TOML file whose values env vars may override). |
 | `from_config(config=None, config_path="configs/default.toml")` | Build from an `NMafcConfig` you pass in; when `config` is None, load from `config_path`. |
 
-`await NeuromorphicMemory.from_openai()` — the classmethods are async and
-return an awaiting-able instance usable with
-`async with await NeuromorphicMemory.from_openai() as mem:`.
+`NeuromorphicMemory.from_openai()` — the constructors are synchronous
+classmethods that return an instance directly; use `async with` on the
+returned instance:
+
+```python
+async with NeuromorphicMemory.from_openai() as mem:
+    ...
+```
 
 ### Core operations
 

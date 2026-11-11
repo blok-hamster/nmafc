@@ -97,7 +97,7 @@ with SyncNeuromorphicMemory.from_openai() as mem:
 # close() called for you
 
 # async equivalent:
-# async with await NeuromorphicMemory.from_openai() as mem: ...
+# async with NeuromorphicMemory.from_openai() as mem: ...
 ```
 
 ## Multi-tenant: agent & conversation

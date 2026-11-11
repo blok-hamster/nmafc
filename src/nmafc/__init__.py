@@ -11,7 +11,7 @@ package root:
 
     from nmafc import NeuromorphicMemory
 
-    mem = await NeuromorphicMemory.from_openai()   # needs only OPENAI_API_KEY
+    mem = NeuromorphicMemory.from_openai()   # needs only OPENAI_API_KEY
     result = await mem.remember([{"role": "user", "content": "..."}])
     hits = await mem.recall("what is alice's job?")
 
