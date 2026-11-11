@@ -1,0 +1,48 @@
+name: Release
+
+# Tag-driven release: push a v* tag, CI builds the distributions, checks
+# metadata, publishes to PyPI via Trusted Publishing (no API token stored),
+# and attaches the artefacts to a GitHub release.
+#
+# One-time setup on PyPI (done by a human, not this workflow): register the
+# project and add this repo + workflow as a Trusted Publisher
+# (https://pypi.org/manage/account/publishing/).
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+      - name: Build sdist and wheel
+        run: uv build
+      - name: Metadata check
+        run: uvx twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      # Trusted Publishing exchanges an OIDC token with PyPI; no secret needed.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Attach artefacts to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*

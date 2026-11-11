@@ -95,6 +95,32 @@ extension surface is two abstract methods. Note that registration is currently a
 hand-written dispatch chain in `factory.py` — there is no plugin registry — so a
 new provider requires editing that file.
 
+## Cutting a release
+
+Version lives in two places that must agree — `pyproject.toml` and
+`nmafc.__version__` — and a unit test enforces the match (`test_version_matches_pyproject`).
+Releases are tag-driven; nothing is published by hand.
+
+1. Update `CHANGELOG.md`: rename `## [Unreleased]` to `## [x.y.z] — unreleased`
+   and start a fresh empty `## [Unreleased]` section.
+2. Bump `project.version` in `pyproject.toml` and `__version__` in
+   `src/nmafc/__init__.py` to the same value.
+3. Run the full gate locally: `uv lock --check && uv run ruff check . && uv run pytest`.
+4. Commit ("release: x.y.z"), then tag and push: `git tag vx.y.z && git push origin main vx.y.z`.
+   (First release was cut before this runbook existed, so the changelog date for
+   it may read `unreleased`.)
+5. The `Release` workflow builds the sdist and wheel, runs `twine check`,
+   publishes to PyPI via Trusted Publishing, and attaches the artefacts to a
+   GitHub release. Watch it finish — no manual `twine upload`, ever.
+6. Smoke-check the result: `pip install nmafc==x.y.z` on a clean machine (or a
+   fresh venv), then `python -c "import nmafc; print(nmafc.__version__)"`.
+
+One-time setup (maintainer, on PyPI): register the project and add this repo +
+the `release.yml` workflow as a Trusted Publisher under
+<https://pypi.org/manage/account/publishing/>. Until that is done, the publish
+step fails with a descriptive PyPI error; the build job still attaches the
+artefacts to the GitHub release.
+
 ## Reporting security issues
 
 Do **not** open a public issue for a security vulnerability. See

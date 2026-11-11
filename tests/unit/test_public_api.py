@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -50,8 +51,17 @@ def test_exceptions_derive_from_nmafc_error():
         assert issubclass(exc, NmafcError)
 
 
-def test_version_is_a_string():
-    assert isinstance(nmafc.__version__, str) and nmafc.__version__
+def test_version_matches_pyproject():
+    """Single source of truth: pyproject.toml version. A mismatch means a
+    release forgot to bump `nmafc.__version__` (or vice versa)."""
+    import tomllib
+
+    pyproject = Path(nmafc.__file__).resolve().parents[2] / "pyproject.toml"
+    if not pyproject.exists():  # installed from a wheel, no source tree
+        pytest.skip("pyproject.toml not next to the package")
+    with open(pyproject, "rb") as f:
+        declared = tomllib.load(f)["project"]["version"]
+    assert nmafc.__version__ == declared
 
 
 def test_import_does_not_load_optional_sdks():

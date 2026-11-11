@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -28,3 +28,110 @@ jobs:
         env:
           NMAFC_RUN_LIVE: "0"
         run: uv run pytest
+
+  cold-pg:
+    # The PostgreSQL cold-store suite needs a real server; an ephemeral
+    # service container provides one with no credentials to manage.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: nmafc
+          POSTGRES_PASSWORD: nmafc
+          POSTGRES_DB: nmafc
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: uv sync --extra postgres
+      - name: Cold PG suite
+        env:
+          NMAFC_TEST_PG_DSN: postgresql://nmafc:nmafc@localhost:5432/nmafc
+        run: uv run pytest tests/integration/test_cold_pg.py
+
+  wheel:
+    # Test the artefact, not the repo (LIBRARY_PLAN L2.1/L2.2): build the
+    # distributions, check metadata, then install the wheel into a clean venv
+    # and exercise the public surface there. Catches "works in the checkout,
+    # broken for pip users".
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+      - name: Build sdist and wheel
+        run: uv build
+      - name: Metadata check
+        run: uvx twine check dist/*
+      - name: Wheel contents audit
+        run: |
+          python3 - <<'PY'
+          import zipfile, glob
+          wheel = glob.glob("dist/*.whl")[0]
+          names = zipfile.ZipFile(wheel).namelist()
+          assert any(n.endswith("nmafc/py.typed") for n in names), "py.typed missing"
+          banned = ("tests/", "scripts/", "configs/", "web-ui/", ".env")
+          offenders = [n for n in names if any(b in n for b in banned)]
+          assert not offenders, f"repo-only paths in wheel: {offenders}"
+          print(f"wheel contents OK ({len(names)} files)")
+          PY
+      - name: Clean-venv install smoke test
+        run: |
+          python3 -m venv /tmp/wheel-venv
+          /tmp/wheel-venv/bin/pip install --quiet dist/nmafc-*.whl
+          /tmp/wheel-venv/bin/python - <<'PY'
+          import os, tempfile
+          os.environ["NMAFC_DATA_DIR"] = tempfile.mkdtemp()
+
+          import nmafc
+          assert nmafc.__version__, "version missing"
+          from nmafc import (
+              NeuromorphicMemory, SyncNeuromorphicMemory, NMafcConfig,
+              RecallResult, RememberResult, NmafcError, MissingAPIKeyError,
+              MissingExtraError, ProviderNotConfiguredError, StorageError,
+          )
+
+          # Missing key -> actionable error naming the env var.
+          os.environ.pop("OPENAI_API_KEY", None)
+          try:
+              NeuromorphicMemory.from_openai()
+              raise SystemExit("expected MissingAPIKeyError")
+          except MissingAPIKeyError as e:
+              assert "OPENAI_API_KEY" in str(e), str(e)
+
+          # Key set but SDK missing (bare wheel, no extras) -> missing-extra
+          # error with the exact pip command.
+          os.environ["OPENAI_API_KEY"] = "sk-dummy"
+          try:
+              SyncNeuromorphicMemory.from_openai()
+              raise SystemExit("expected MissingExtraError")
+          except MissingExtraError as e:
+              assert "nmafc[llm]" in str(e), str(e)
+
+          # Storage defaults land inside NMAFC_DATA_DIR.
+          from nmafc.storage.config import StorageConfig
+          cfg = StorageConfig()
+          assert cfg.hot_uri.startswith(os.environ["NMAFC_DATA_DIR"])
+          assert cfg.cold_uri.startswith(os.environ["NMAFC_DATA_DIR"])
+
+          # Entry points installed and runnable.
+          import subprocess, sys
+          out = subprocess.run(
+              ["/tmp/wheel-venv/bin/nmafc", "--help"],
+              capture_output=True, text=True,
+          )
+          assert out.returncode == 0, out.stderr
+
+          print("wheel smoke OK:", nmafc.__version__)
+          PY

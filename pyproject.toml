@@ -1,6 +1,6 @@
 [project]
 name = "nmafc"
-version = "0.1.0"
+version = "0.2.0"
 description = "Neuromorphic Memory Architecture for Conversational AI - A biologically-inspired state-based memory wrapper for LLM agents"
 readme = "README.md"
 license = "PolyForm-Noncommercial-1.0.0"
@@ -68,6 +68,9 @@ cli = [
 mcp = [
     "mcp<2",
 ]
+fastembed = [
+    "fastembed>=0.3",
+]
 bench = [
     "huggingface-hub>=0.20",
     "pandas>=2.0",
@@ -75,7 +78,7 @@ bench = [
     "kaleido>=0.2.1",
     "rouge-score>=0.1.2",
 ]
-all = ["nmafc[llm,aws,postgres,bench,web,cli,mcp]"]
+all = ["nmafc[llm,aws,postgres,bench,web,cli,mcp,fastembed]"]
 
 [project.scripts]
 nmafc = "nmafc.cli:main"
