@@ -27,6 +27,7 @@ jobs:
       - name: Tests
         env:
           NMAFC_RUN_LIVE: "0"
+          NMAFC_EMBEDDING_DIM: "384"
         run: uv run pytest
 
   cold-pg:
