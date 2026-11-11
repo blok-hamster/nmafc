@@ -13,7 +13,7 @@ import asyncio
 import tempfile
 from pathlib import Path
 
-from nmafc import NeuromorphicMemory
+from nmafc import SyncNeuromorphicMemory
 from nmafc.integration.base import EmbeddingProvider, LLMProvider
 from nmafc.schemas.memory import MemoryStateUpdate
 from nmafc.storage.config import NMafcConfig, StorageConfig
@@ -60,13 +60,13 @@ async def main():
         ),
     )
 
-    async with NeuromorphicMemory.from_providers(
+    with SyncNeuromorphicMemory.from_providers(
         llm_provider=llm,
         embedding_provider=embedder,
         config=config,
     ) as mem:
         # Inject facts manually (bypasses LLM extraction)
-        await mem.ingest_updates([
+        mem.ingest_updates_sync([
             MemoryStateUpdate(
                 entity_name="user_name",
                 fact_content="User is named Bob",
@@ -84,7 +84,7 @@ async def main():
         print(f"Stats: {mem.get_hot_stats()}")
 
         # Query (MyLLM won't extract anything, but retrieval still works)
-        response = await mem.process_turn("Tell me about Bob")
+        response = mem.process_turn_sync("Tell me about Bob")
         print(f"Response: {response}")
 
     import shutil
