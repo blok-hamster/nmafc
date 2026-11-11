@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 
-from nmafc.wrapper import NeuromorphicMemory
+from nmafc import NeuromorphicMemory
 
 
 async def main() -> None:

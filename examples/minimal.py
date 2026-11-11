@@ -10,7 +10,7 @@ Run:
 
 import asyncio
 
-from nmafc.wrapper import NeuromorphicMemory
+from nmafc import NeuromorphicMemory
 
 
 async def main():

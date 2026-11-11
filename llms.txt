@@ -1,0 +1,66 @@
+# NMAFC
+
+> Biologically-inspired stateful memory for LLM agents: bounded, high-signal
+> memory with exponential decay, spaced repetition (LTP), override suppression
+> and an append-only archive for rollback. Python 3.11+, local-first, ten LLM
+> routes and five embedding routes, S3/PostgreSQL remote backends. Licence:
+> PolyForm Noncommercial 1.0.0 (non-commercial use free, commercial requires
+> agreement).
+
+## Install & quickstart
+
+- [Installation](docs/installation.md): pip/uv, extras matrix (`llm`, `anthropic`, `aws`, `postgres`, `fastembed`, `web`, `mcp`, `cli`, `all`), Python 3.11–3.13.
+- [Quickstart walkthrough](docs/quickstart.md): three constructors, remember/recall, process_turn, context managers, tenancy, maintenance.
+- Minimal sync usage:
+
+```python
+from nmafc import SyncNeuromorphicMemory
+
+with SyncNeuromorphicMemory.from_openai() as mem:   # needs OPENAI_API_KEY
+    stored = mem.remember([{"role": "user", "content": "I'm allergic to shellfish."}])
+    print(stored.updates_ingested)                   # facts written
+    hits = mem.recall("what can't I eat?")
+    print(hits.context)                              # bounded memory context
+```
+
+## Public API map
+
+- [API reference](docs/api.md): every exported symbol; import from `nmafc` root.
+- Classes: `NeuromorphicMemory` (async: `process_turn`, `remember`, `recall`, `forget_entity`, `forget_record`, `ingest_updates`, `consolidate`, `rollback`, `get_*_stats`, `get_events*`, `maintain`, `close`), `SyncNeuromorphicMemory` (same, blocking; `*_sync` variants; `from_providers`).
+- Constructors (both classes): `from_openai()` (key-only), `from_env()` (env vars decide), `from_config(config=…|config_path=…)`.
+- Result types: `RememberResult` (`turn`, `updates_ingested`, `overrides_suppressed`, `consolidated`, scope ids), `RecallResult` (`query`, `context`, `hits`, `token_estimate`, `turn`, scope ids).
+- Config: `NMafcConfig` (`llm_provider_model`, `embedding_provider_model`, `agent_id`, `conversation_id`, `storage`, `decay`).
+- Exceptions: `NmafcError` base; `MissingAPIKeyError`, `MissingExtraError`, `ProviderNotConfiguredError`, `StorageError`.
+- `__all__` is the stability contract; everything else may change in any release.
+
+## Configuration precedence
+
+- Explicit argument > environment variable > TOML file > library default.
+- [Configuration](docs/configuration.md): every env var (`NMAFC_LLM_PROVIDER_MODEL`, `NMAFC_EMBEDDING_PROVIDER_MODEL`, `NMAFC_EMBEDDING_DIM`, `NMAFC_AGENT_ID`, `NMAFC_CONVERSATION_ID`, `NMAFC_DATA_DIR`, `NMAFC_HOT_URI`, `NMAFC_COLD_URI`, `NMAFC_EVENT_LOG_URI`, `NMAFC_LLM_TEMPERATURE`, `NMAFC_LLM_MAX_TOKENS`).
+- Decay/consolidation constants are frozen — configure models and locations, not cognition.
+
+## Providers
+
+- [Providers](docs/providers.md): LLM routes `openai/`, `anthropic/`, `azure/`, `azure_v1/`, `bedrock/`, `groq/`, `openrouter/`, `together/`, `ollama/`, `lmstudio/`, `vllm/`; embeddings `openai/`, `azure/`, `bedrock/`, `ollama/`, `fastembed/`.
+- Provider prefix selects the route from a `"provider/model"` string; bare `"model"` means `openai/model`.
+- Key env vars: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `TOGETHER_API_KEY`, `AZURE_OPENAI_API_KEY` (+ `AZURE_OPENAI_ENDPOINT` for Azure), AWS chain for `bedrock/`; none for local routes.
+
+## Storage
+
+- [Storage](docs/storage.md): data dir (`NMAFC_DATA_DIR`; macOS Application Support / XDG data home / `%APPDATA%`), per-store URIs, S3 hot with `storage_options`, PostgreSQL cold, multi-tenancy, layout recipes.
+- Hot tier: LanceDB, local or `s3://`. Cold tier: SQLite local or `postgresql://`. Event log: local SQLite only (documented limitation).
+- Multi-tenant scoping: every record keyed by `(agent_id, conversation_id)`.
+
+## Errors
+
+- [Error catalogue](docs/errors.md): trigger, example message, and fix for every public exception.
+- `MissingAPIKeyError` names the env var; `MissingExtraError` names the `pip install nmafc[extra]` command; `ProviderNotConfiguredError` names the missing setting; `StorageError` names the credential chain or path.
+- Catch `NmafcError` for all of them. Empty `remember`/`recall` results are not errors.
+
+## Reference
+
+- [README](README.md): architecture, mechanisms, benchmark (LoCoMo 71.4% vs RAG 64.6% at −34% context), CLI, web UI, math spec.
+- [Changelog](CHANGELOG.md): release history; `nmafc.__version__` mirrors it.
+- [Contributing](CONTRIBUTING.md): dev setup, code standards, release runbook.
+- [Licence](LICENSE): PolyForm Noncommercial 1.0.0; LoCoMo benchmark data CC BY-NC 4.0.
+- [Security](SECURITY.md): reporting and current posture.

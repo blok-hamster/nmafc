@@ -4,6 +4,34 @@ A biologically-inspired stateful memory system for LLM agents. NMAFC gives conve
 
 Unlike context-window stuffing or naive vector stores that grow without bound, NMAFC maintains a bounded, high-signal memory that improves with use. Frequently accessed facts become permanent. Contradicted facts are immediately suppressed. Stale information naturally decays away.
 
+## Install in 2 minutes
+
+```bash
+pip install "nmafc[llm]"        # Python 3.11+; or: uv add nmafc
+export OPENAI_API_KEY=sk-...    # any provider works — see the table below
+```
+
+```python
+from nmafc import SyncNeuromorphicMemory
+
+with SyncNeuromorphicMemory.from_openai() as mem:
+    stored = mem.remember([{"role": "user", "content": "I'm allergic to shellfish."}])
+    print(stored.updates_ingested)                    # 1 fact kept
+    hits = mem.recall("what can't I eat?")
+    print(hits.context)                               # bounded memory context
+```
+
+Your data lives in the per-user platform data directory — set `NMAFC_DATA_DIR`
+to choose a different spot. Nothing is written to your project folder. When
+something is misconfigured, the error names the exact fix (the env var to set,
+or the `pip install nmafc[...]` command to run): the
+[error catalogue](docs/errors.md) lists every one.
+
+Deep documentation: [installation](docs/installation.md) ·
+[quickstart walkthrough](docs/quickstart.md) ·
+[configuration](docs/configuration.md) · [providers](docs/providers.md) ·
+[API reference](docs/api.md) · [storage & remote backends](docs/storage.md).
+
 ## Where it stands
 
 Full LoCoMo, all ten conversations, **paired against a RAG baseline in the same

@@ -8,8 +8,7 @@ Run:
     python examples/sync_usage.py
 """
 
-from nmafc.schemas.memory import MemoryStateUpdate
-from nmafc.wrapper import SyncNeuromorphicMemory
+from nmafc import SyncNeuromorphicMemory
 
 
 def main():
@@ -24,15 +23,6 @@ def main():
             "Where do I work?"
         )
         print(f"Turn 2: {response}\n")
-
-        # Manual ingestion
-        mem.ingest_updates_sync([
-            MemoryStateUpdate(
-                entity_name="company",
-                fact_content="Works at Acme Corp as a senior engineer",
-                memory_type="CoreAnchor",
-            )
-        ])
 
         # Introspection
         stats = mem.get_hot_stats()
