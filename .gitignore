@@ -56,8 +56,15 @@ logs/
 # OS files
 .DS_Store
 generate_arch_diagram.py
-DEMO_SCRIPT.md
 NMAFC_Architecture.pdf
+
+# Internal planning & ops documents - kept local, never published
+DEMO_SCRIPT.md
+IMPLEMENTATION_PLAN.md
+RECENT_OPS.md
+RESEARCH.md
+WHAT-CHANGED.md
+run_locomo_resume.cmd
 
 # OneDrive sync conflict copies from the 'Bigbrown' machine
 *-Bigbrown.*
