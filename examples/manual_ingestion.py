@@ -13,13 +13,29 @@ Run:
 """
 
 import asyncio
+import tempfile
+from pathlib import Path
 
+from nmafc import NeuromorphicMemory
 from nmafc.schemas.memory import MemoryStateUpdate, MemoryType
-from nmafc.wrapper import NeuromorphicMemory
+from nmafc.storage.config import NMafcConfig, StorageConfig
 
 
 async def main():
-    async with NeuromorphicMemory.from_config() as mem:
+    tmp = Path(tempfile.mkdtemp(prefix="nmafc_example_"))
+    config = NMafcConfig(
+        llm_provider_model="openai/gpt-4o-mini",
+        embedding_provider_model="fastembed/BAAI/bge-small-en-v1.5",
+        agent_id="example-agent",
+        conversation_id="example-conv",
+        storage=StorageConfig(
+            hot_uri=str(tmp / "hot.lancedb"),
+            cold_uri=str(tmp / "cold.db"),
+            event_log_uri=str(tmp / "events.db"),
+            embedding_dim=384,
+        ),
+    )
+    async with NeuromorphicMemory.from_config(config=config) as mem:
         # ── Bootstrap facts ──
         print("=== Injecting initial facts ===")
         await mem.ingest_updates([
@@ -77,6 +93,9 @@ async def main():
         print("\n=== Rollback to turn 2 ===")
         restored = await mem.rollback(to_turn=2)
         print(f"Restored {restored} records. Current turn: {mem.current_turn}")
+
+    import shutil
+    shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

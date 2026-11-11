@@ -1,7 +1,8 @@
 """from_openai() — zero config, one key needed.
 
 Zero configuration besides an OpenAI key: gpt-4o-mini for extraction and
-chat, text-embedding-3-small for embeddings.
+chat, text-embedding-3-small for embeddings. The constructor is synchronous
+— no `await`. Use `async with` on the returned instance.
 
 Prerequisites:
     pip install nmafc[llm]

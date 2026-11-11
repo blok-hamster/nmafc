@@ -10,10 +10,13 @@ Run:
 from __future__ import annotations
 
 import asyncio
+import tempfile
+from pathlib import Path
 
+from nmafc import NeuromorphicMemory
 from nmafc.integration.base import EmbeddingProvider, LLMProvider
 from nmafc.schemas.memory import MemoryStateUpdate
-from nmafc.wrapper import NeuromorphicMemory
+from nmafc.storage.config import NMafcConfig, StorageConfig
 
 
 class MyLLMProvider(LLMProvider):
@@ -43,9 +46,24 @@ async def main():
     llm = MyLLMProvider()
     embedder = MyEmbeddingProvider()
 
+    tmp = Path(tempfile.mkdtemp(prefix="nmafc_example_"))
+    config = NMafcConfig(
+        llm_provider_model="custom/bob",
+        embedding_provider_model="custom/dim8",
+        agent_id="example-agent",
+        conversation_id="example-conv",
+        storage=StorageConfig(
+            hot_uri=str(tmp / "hot.lancedb"),
+            cold_uri=str(tmp / "cold.db"),
+            event_log_uri=str(tmp / "events.db"),
+            embedding_dim=8,
+        ),
+    )
+
     async with NeuromorphicMemory.from_providers(
         llm_provider=llm,
         embedding_provider=embedder,
+        config=config,
     ) as mem:
         # Inject facts manually (bypasses LLM extraction)
         await mem.ingest_updates([
@@ -68,6 +86,9 @@ async def main():
         # Query (MyLLM won't extract anything, but retrieval still works)
         response = await mem.process_turn("Tell me about Bob")
         print(f"Response: {response}")
+
+    import shutil
+    shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":
