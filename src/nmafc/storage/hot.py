@@ -142,12 +142,12 @@ class HotStorage:
         def work(t: Any) -> None:
             existing = (
                 t.search()
-                .where(f"{self._scope_filter} AND id = '{record.id}'")
+                .where(f"{self._scope_filter} AND id = {_sql_str(record.id)}")
                 .limit(1)
                 .to_list()
             )
             if existing:
-                t.delete(f"{self._scope_filter} AND id = '{record.id}'")
+                t.delete(f"{self._scope_filter} AND id = {_sql_str(record.id)}")
             row = {
                 "vector": embedding,
                 "id": record.id,
@@ -235,7 +235,7 @@ class HotStorage:
     def update_weight(self, record_id: str, new_weight: float) -> None:
         results = (
             self._table.search()
-            .where(f"{self._scope_filter} AND id = '{record_id}'")
+            .where(f"{self._scope_filter} AND id = {_sql_str(record_id)}")
             .limit(1)
             .to_list()
         )
@@ -279,7 +279,7 @@ class HotStorage:
             return
 
         weights = dict(updates)  # last write wins, as in the sequential loop
-        quoted = ", ".join(f"'{record_id}'" for record_id in weights)
+        quoted = ", ".join(_sql_str(record_id) for record_id in weights)
         rows = (
             self._table.search()
             .where(f"{self._scope_filter} AND id IN ({quoted})")
@@ -302,14 +302,14 @@ class HotStorage:
         """Delete several records in one predicate instead of one call each."""
         if not record_ids:
             return
-        quoted = ", ".join(f"'{record_id}'" for record_id in set(record_ids))
+        quoted = ", ".join(_sql_str(record_id) for record_id in set(record_ids))
         self._table.delete(f"{self._scope_filter} AND id IN ({quoted})")
 
     def update_reinforcement(self, record_id: str, new_k: int, turn: int) -> None:
         """One LTP writeback. See apply_reinforcements for the clock guard."""
         results = (
             self._table.search()
-            .where(f"{self._scope_filter} AND id = '{record_id}'")
+            .where(f"{self._scope_filter} AND id = {_sql_str(record_id)}")
             .limit(1)
             .to_list()
         )
@@ -347,7 +347,7 @@ class HotStorage:
             return
 
         new_ks = dict(updates)  # last write wins, as in the sequential loop
-        quoted = ", ".join(f"'{record_id}'" for record_id in new_ks)
+        quoted = ", ".join(_sql_str(record_id) for record_id in new_ks)
         rows = (
             self._table.search()
             .where(f"{self._scope_filter} AND id IN ({quoted})")
@@ -402,7 +402,7 @@ class HotStorage:
         if not updates:
             return
         invalidations = dict(updates)
-        quoted = ", ".join(f"'{rid}'" for rid in invalidations)
+        quoted = ", ".join(_sql_str(rid) for rid in invalidations)
 
         def work(t: Any) -> None:
             rows = (
@@ -478,7 +478,7 @@ class HotStorage:
         return True
 
     def delete(self, record_id: str) -> None:
-        self._table.delete(f"{self._scope_filter} AND id = '{record_id}'")
+        self._table.delete(f"{self._scope_filter} AND id = {_sql_str(record_id)}")
 
     def get_all_mutable(self) -> list[MemoryRecord]:
         results = self._retry_read(
@@ -535,7 +535,7 @@ class HotStorage:
         results = self._retry_read(
             lambda t: (
                 t.search()
-                .where(f"{self._scope_filter} AND id = '{record_id}'")
+                .where(f"{self._scope_filter} AND id = {_sql_str(record_id)}")
                 .limit(1)
                 .to_list()
             )
