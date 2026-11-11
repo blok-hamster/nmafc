@@ -857,6 +857,28 @@ class SyncNeuromorphicMemory:
         return cls(mem)
 
     @classmethod
+    def from_env(
+        cls, config_path: str | Path | None = None,
+    ) -> SyncNeuromorphicMemory:
+        """Build a fully-configured instance from environment variables.
+
+        Mirrors `NeuromorphicMemory.from_env`: when `config_path` is None,
+        only environment variables are read, with library defaults for
+        anything unset.
+        """
+        return cls(NeuromorphicMemory.from_env(config_path=config_path))
+
+    @classmethod
+    def from_openai(cls) -> SyncNeuromorphicMemory:
+        """Convenience constructor wired to OpenAI with no config file needed.
+
+        Mirrors `NeuromorphicMemory.from_openai`: `gpt-4o-mini` for
+        extraction, `text-embedding-3-small` for embeddings, both reading
+        `OPENAI_API_KEY` from the environment.
+        """
+        return cls(NeuromorphicMemory.from_openai())
+
+    @classmethod
     def from_providers(
         cls,
         llm_provider: LLMProvider,

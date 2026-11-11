@@ -6,8 +6,9 @@ from typing import Any, Callable, Optional, TypeVar
 import lancedb
 import pyarrow as pa
 
+from nmafc.exceptions import StorageError
 from nmafc.schemas.memory import MemoryRecord, MemoryType, SearchResult
-from nmafc.storage.config import StorageConfig
+from nmafc.storage.config import StorageConfig, notice_legacy_data_dir
 
 TABLE_NAME = "memory_vectors"
 
@@ -58,12 +59,29 @@ class HotStorage:
     """
 
     def __init__(self, config: StorageConfig) -> None:
+        notice_legacy_data_dir(config.hot_uri, config.cold_uri)
         self._config = config
         self._agent_id = config.agent_id
         self._conversation_id = config.conversation_id
         if not config.is_cloud:
             Path(config.hot_uri).mkdir(parents=True, exist_ok=True)
-        self._db = lancedb.connect(config.hot_uri)
+        try:
+            self._db = lancedb.connect(
+                config.hot_uri, storage_options=config.storage_options
+            )
+        except Exception as e:
+            if config.is_cloud:
+                raise StorageError(
+                    f"Could not open the S3 hot store at {config.hot_uri}. "
+                    "Check the AWS credential chain (AWS_ACCESS_KEY_ID / "
+                    "AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN / AWS_REGION, "
+                    "or an instance profile), bucket access, and "
+                    "StorageConfig.storage_options."
+                ) from e
+            raise StorageError(
+                f"Could not open local hot storage at {config.hot_uri} "
+                f"({e.__class__.__name__}). Check the path and permissions."
+            ) from e
         self._ensure_table()
 
     def _ensure_table(self) -> None:

@@ -25,7 +25,8 @@ FROM python:3.11-slim AS runtime
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     NMAFC_STATIC_UI_DIR=/app/web-ui/out \
-    NMAFC_CONFIG_PATH=/app/configs/default.toml
+    NMAFC_CONFIG_PATH=/app/configs/default.toml \
+    NMAFC_DATA_DIR=/app/data
 
 WORKDIR /app
 

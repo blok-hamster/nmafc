@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import warnings
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -16,24 +17,102 @@ else:
 
 from nmafc.schemas.memory import DecayConfig
 
+_LEGACY_CWD_DATA_DIR = "data"
+
+
+def default_data_dir() -> Path:
+    """Resolve the default location for NMAFC's local data stores.
+
+    Precedence: the ``NMAFC_DATA_DIR`` environment variable, else a stable
+    per-user platform directory (macOS Application Support, Windows
+    ``%APPDATA%``, XDG data dir elsewhere).
+
+    The historical default was cwd-relative ``./data``, which stranded user
+    memory in whatever directory a script happened to run from. Set
+    ``NMAFC_DATA_DIR=./data`` to keep that layout deliberately.
+    """
+    override = os.environ.get("NMAFC_DATA_DIR")
+    if override:
+        return Path(override).expanduser()
+    if sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
+        return base / "nmafc"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "nmafc"
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg:
+        return Path(xdg).expanduser() / "nmafc"
+    return Path.home() / ".local" / "share" / "nmafc"
+
+
+_legacy_data_dir_notice_shown = False
+
+
+def notice_legacy_data_dir(hot_uri: str, cold_uri: str) -> None:
+    """Notice when a fresh default store coexists with an old cwd ./data tree.
+
+    Called by the storage layer when a store is about to be opened. Fires at
+    most once per process, and only when the URIs in play are the *library
+    defaults* — an explicit ``NMAFC_DATA_DIR``, ``NMAFC_HOT_URI`` /
+    ``NMAFC_COLD_URI``, TOML setting, or programmatic override means the
+    caller chose the location and gets no warning.
+    """
+    global _legacy_data_dir_notice_shown
+    if _legacy_data_dir_notice_shown:
+        return
+    if os.environ.get("NMAFC_DATA_DIR"):
+        return  # deliberate override: the caller picked the location
+    legacy = Path(_LEGACY_CWD_DATA_DIR)
+    if not (legacy / "lancedb").exists() and not (legacy / "cold.db").exists():
+        return  # nothing legacy to lose
+    if hot_uri != str(default_data_dir() / "lancedb") or cold_uri != str(
+        default_data_dir() / "cold.db"
+    ):
+        return  # URIs came from env/TOML/explicit config, not the defaults
+    warnings.warn(
+        "NMAFC found memory stores in ./data (the pre-0.2 default location), "
+        f"but the default data directory is now {default_data_dir()}. "
+        "Nothing was moved. To keep reading the existing stores, set "
+        "NMAFC_DATA_DIR=./data (or point NMAFC_HOT_URI / NMAFC_COLD_URI at "
+        "the files directly).",
+        UserWarning,
+        stacklevel=2,
+    )
+    _legacy_data_dir_notice_shown = True
+
 
 class StorageConfig(BaseModel):
     """Configuration for the dual-track storage layer."""
 
     hot_uri: str = Field(
-        default="./data/lancedb",
-        description="LanceDB storage URI. Local path or s3:// for cloud.",
+        default_factory=lambda: str(default_data_dir() / "lancedb"),
+        description=(
+            "LanceDB storage URI. Local path or s3:// for cloud. "
+            "Defaults under the NMAFC_DATA_DIR-resolved data directory."
+        ),
     )
     cold_uri: str = Field(
-        default="./data/cold.db",
+        default_factory=lambda: str(default_data_dir() / "cold.db"),
         description=(
             "Cold ROM URI. Local .db path for SQLite, or "
             "postgresql:// DSN for remote PostgreSQL."
         ),
     )
     event_log_uri: str = Field(
-        default="./data/events.db",
-        description="Path to the cognitive event log SQLite database for the Web UI.",
+        default_factory=lambda: str(default_data_dir() / "events.db"),
+        description=(
+            "Path to the cognitive event log SQLite database for the Web UI. "
+            "Local SQLite only - there is no remote event log backend."
+        ),
+    )
+    storage_options: dict[str, str] | None = Field(
+        default=None,
+        description=(
+            "Extra options forwarded to lancedb.connect() for remote object "
+            "stores (s3:// hot URIs), e.g. region, endpoint_url, or session "
+            "credentials. Ignored for local paths. When unset, LanceDB uses "
+            "the ambient AWS credential chain."
+        ),
     )
     embedding_dim: int = Field(
         default_factory=lambda: int(os.environ.get("NMAFC_EMBEDDING_DIM", "1536")),

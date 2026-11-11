@@ -277,6 +277,8 @@ def cmd_init() -> None:
     except ImportError:
         sys.exit("Install rich for the setup wizard: pip install 'nmafc[cli]'")
 
+    from nmafc.storage.config import default_data_dir
+
     console.print(Panel.fit(
         "[bold]NMAFC Setup Wizard[/bold]\n\n"
         "Configure your LLM provider, embedding model,\n"
@@ -337,7 +339,7 @@ def cmd_init() -> None:
 
     # ── Storage ──
     console.print("\n[bold]Storage[/bold]")
-    data_dir = Prompt.ask("Data directory", default="./data")
+    data_dir = Prompt.ask("Data directory", default=str(default_data_dir()))
 
     # ── Write .env ──
     env_path = Path(".env")
@@ -438,13 +440,14 @@ provider_model = "{llm_model}"
         "[bold green]Setup complete![/bold green]\n\n"
         f"  LLM:      [cyan]{llm_model}[/cyan]\n"
         f"  Embedding: [cyan]{embed_model}[/cyan]\n"
-        f"  Config:    [cyan]{config_path}[/cyan]\n\n"
+        f"  Config:    [cyan]{config_path}[/cyan]\n"
+        f"  Data dir:  [cyan]{data_dir}[/cyan]\n\n"
         "Next steps:\n"
         "  [bold]nmafc start[/bold]              — launch backend + frontend\n"
         "  [bold]nmafc chat[/bold]               — interactive terminal chat\n"
         "  [bold]nmafc chat --llm ollama/llama3[/bold] — use a different model\n\n"
         "Three-line integration:\n"
-        "  [cyan]from nmafc.wrapper import NeuromorphicMemory[/cyan]\n"
+        "  [cyan]from nmafc import NeuromorphicMemory[/cyan]\n"
         "  [cyan]memory = NeuromorphicMemory.from_env()[/cyan]\n"
         "  [cyan]"
         "await memory.remember([{\"role\": \"user\", \"content\": \"...\"}]) "
