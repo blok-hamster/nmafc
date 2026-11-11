@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from nmafc.exceptions import MissingExtraError
 from nmafc.integration.base import EmbeddingProvider, LLMProvider
 from nmafc.schemas.memory import MemoryStateUpdate, UnifiedMemoryPayload
 
@@ -65,7 +66,10 @@ class AnthropicProvider(LLMProvider):
         try:
             from anthropic import AsyncAnthropic
         except ImportError as e:
-            raise ImportError("Install anthropic: pip install nmafc[llm]") from e
+            raise MissingExtraError(
+                "The anthropic SDK is required for this provider: "
+                "pip install 'nmafc[llm]'"
+            ) from e
 
         self._client = AsyncAnthropic(api_key=api_key)
         self._model = model

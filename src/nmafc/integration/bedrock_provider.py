@@ -4,6 +4,7 @@ import asyncio
 import json
 from typing import Any, cast
 
+from nmafc.exceptions import MissingExtraError
 from nmafc.integration.base import EmbeddingProvider, LLMProvider
 from nmafc.schemas.memory import MemoryStateUpdate, UnifiedMemoryPayload
 
@@ -84,8 +85,8 @@ class BedrockProvider(LLMProvider):
         try:
             import boto3
         except ImportError as e:
-            raise ImportError(
-                "Install boto3 for Bedrock support: pip install boto3"
+            raise MissingExtraError(
+                "boto3 is required for Bedrock support: pip install 'nmafc[aws]'"
             ) from e
 
         self._client = boto3.client(
@@ -285,8 +286,8 @@ class BedrockEmbedding(EmbeddingProvider):
         try:
             import boto3
         except ImportError as e:
-            raise ImportError(
-                "Install boto3 for Bedrock support: pip install boto3"
+            raise MissingExtraError(
+                "boto3 is required for Bedrock support: pip install 'nmafc[aws]'"
             ) from e
 
         self._client = boto3.client(

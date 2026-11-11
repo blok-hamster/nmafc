@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from nmafc.exceptions import MissingExtraError
 from nmafc.schemas.memory import MemoryStateUpdate
 from nmafc.storage.cold_base import ColdStorageBase
 
@@ -25,8 +26,9 @@ class PostgresColdStorage(ColdStorageBase):
         try:
             import psycopg2  # type: ignore[import-not-found]
         except ImportError as e:
-            raise ImportError(
-                "Install psycopg2 for PostgreSQL support: pip install psycopg2-binary"
+            raise MissingExtraError(
+                "psycopg2 is required for PostgreSQL cold storage: "
+                "pip install 'nmafc[postgres]'"
             ) from e
 
         self._agent_id = agent_id

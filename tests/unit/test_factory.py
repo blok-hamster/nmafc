@@ -6,6 +6,7 @@ from importlib.util import find_spec
 
 import pytest
 
+from nmafc.exceptions import MissingAPIKeyError, ProviderNotConfiguredError
 from nmafc.integration.factory import (
     _get_api_key,
     _parse_provider_model,
@@ -160,7 +161,10 @@ class TestCreateAzureProvider:
     def test_azure_requires_endpoint(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("AZURE_OPENAI_API_KEY", "azure-key-123")
         monkeypatch.delenv("AZURE_OPENAI_ENDPOINT", raising=False)
-        with pytest.raises(ValueError, match="Azure endpoint required"):
+        # The factory boundary raises the public exception type naming the
+        # env var; AzureOpenAIProvider keeps its own ValueError as a second
+        # line of defence when constructed directly.
+        with pytest.raises(ProviderNotConfiguredError, match="AZURE_OPENAI_ENDPOINT"):
             create_llm_provider("azure/gpt4-deployment")
 
 
@@ -266,3 +270,61 @@ dim = 1536
         config = NMafcConfig.from_env_or_toml(config_file)
         assert config.llm_provider_model == "groq/mixtral-8x7b"
         assert config.embedding_provider_model == "ollama/nomic-embed-text"
+
+
+class TestKeyRequiredAtFactoryBoundary:
+    """The public factory raises actionable errors; `_get_api_key` stays silent."""
+
+    def test_openai_without_key_raises_naming_env_var(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        with pytest.raises(MissingAPIKeyError) as excinfo:
+            create_llm_provider("openai/gpt-4o-mini")
+        assert "OPENAI_API_KEY" in str(excinfo.value)
+
+    def test_groq_without_key_raises_naming_its_env_var(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("GROQ_API_KEY", raising=False)
+        with pytest.raises(MissingAPIKeyError) as excinfo:
+            create_llm_provider("groq/llama-3.1-70b-versatile")
+        assert "GROQ_API_KEY" in str(excinfo.value)
+
+    @pytest.mark.skipif(not HAS_OPENAI, reason="openai package not installed")
+    def test_explicit_key_bypasses_env_requirement(self):
+        provider = create_llm_provider("openai/gpt-4o-mini", api_key="sk-explicit")
+        assert provider._model == "gpt-4o-mini"
+
+    def test_local_providers_need_no_key(self):
+        if not HAS_OPENAI:
+            pytest.skip("openai package not installed")
+        # Ollama routes through the OpenAI-compatible client but needs no key.
+        provider = create_llm_provider("ollama/llama3")
+        assert provider._model == "llama3"
+
+    def test_embedding_provider_enforces_key_too(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        with pytest.raises(MissingAPIKeyError):
+            create_embedding_provider("openai/text-embedding-3-small")
+
+    @pytest.mark.skipif(not HAS_OPENAI, reason="openai package not installed")
+    def test_azure_without_endpoint_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("AZURE_OPENAI_API_KEY", "az-key")
+        monkeypatch.delenv("AZURE_OPENAI_ENDPOINT", raising=False)
+        with pytest.raises(ProviderNotConfiguredError) as excinfo:
+            create_llm_provider("azure/my-deployment")
+        assert "AZURE_OPENAI_ENDPOINT" in str(excinfo.value)
+
+    @pytest.mark.skipif(not HAS_OPENAI, reason="openai package not installed")
+    def test_azure_v1_without_endpoint_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("AZURE_OPENAI_API_KEY", "az-key")
+        monkeypatch.delenv("AZURE_OPENAI_ENDPOINT", raising=False)
+        with pytest.raises(ProviderNotConfiguredError):
+            create_llm_provider("azure_v1/gpt-4o")

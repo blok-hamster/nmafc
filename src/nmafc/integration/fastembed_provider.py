@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
+from nmafc.exceptions import MissingExtraError
 from nmafc.integration.base import EmbeddingProvider
 
 if TYPE_CHECKING:
@@ -21,8 +22,9 @@ class FastEmbedProvider(EmbeddingProvider):
         try:
             from fastembed import TextEmbedding as _TextEmbedding  # type: ignore[import-not-found]
         except ImportError as e:
-            raise ImportError(
-                "Install fastembed for ONNX embeddings: pip install fastembed"
+            raise MissingExtraError(
+                "fastembed is required for local ONNX embeddings: "
+                "pip install 'nmafc[fastembed]'"
             ) from e
 
         self._model_name = model_name

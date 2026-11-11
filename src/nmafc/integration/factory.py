@@ -30,6 +30,7 @@ try:
 except ImportError:
     pass
 
+from nmafc.exceptions import MissingAPIKeyError, ProviderNotConfiguredError
 from nmafc.integration.base import EmbeddingProvider, LLMProvider
 
 PROVIDER_BASE_URLS: dict[str, str] = {
@@ -81,6 +82,49 @@ def _get_api_key(provider: str, api_key: str | None = None) -> str | None:
     return os.environ.get(env_var)
 
 
+# Providers that cannot work without an API key. Ollama, LM Studio and vLLM
+# are local servers; Bedrock signs requests with ambient boto3 credentials,
+# so none of them appear here and resolve to "not-needed" instead.
+_KEY_REQUIRED_PROVIDERS: dict[str, str] = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "groq": "GROQ_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "together": "TOGETHER_API_KEY",
+    "azure": "AZURE_OPENAI_API_KEY",
+    "azure_v1": "AZURE_OPENAI_API_KEY",
+}
+
+
+def _require_api_key(provider: str, key: str | None) -> str | None:
+    """Return the resolved key, raising a provider-aware error if required.
+
+    `_get_api_key` stays silent so internal callers and tests can probe the
+    environment; the public factory boundary is where the actionable error
+    lives.
+    """
+    env_var = _KEY_REQUIRED_PROVIDERS.get(provider)
+    if key:
+        return key
+    if env_var:
+        raise MissingAPIKeyError(
+            f"The '{provider}' provider needs an API key: set {env_var} in "
+            "your environment, or pass api_key=... to the constructor."
+        )
+    return key
+
+
+def _require_azure_endpoint(provider: str, base_url: str | None) -> str:
+    """Resolve the Azure endpoint, raising a clear error when it is unset."""
+    resolved = base_url or os.environ.get("AZURE_OPENAI_ENDPOINT", "")
+    if not resolved:
+        raise ProviderNotConfiguredError(
+            "The 'azure' provider needs an endpoint: set AZURE_OPENAI_ENDPOINT "
+            "in your environment, or pass base_url=... to the constructor."
+        )
+    return resolved
+
+
 def create_llm_provider(
     provider_model: str,
     api_key: str | None = None,
@@ -111,7 +155,7 @@ def create_llm_provider(
         create_llm_provider("bedrock/anthropic.claude-3-sonnet-20240229-v1:0")
     """
     provider, model = _parse_provider_model(provider_model)
-    resolved_key = _get_api_key(provider, api_key)
+    resolved_key = _require_api_key(provider, _get_api_key(provider, api_key))
 
     if provider == "anthropic":
         from nmafc.integration.anthropic_provider import AnthropicProvider
@@ -121,7 +165,7 @@ def create_llm_provider(
     if provider == "azure":
         from nmafc.integration.azure_provider import AzureOpenAIProvider
 
-        resolved_url = base_url or os.environ.get("AZURE_OPENAI_ENDPOINT", "")
+        resolved_url = _require_azure_endpoint(provider, base_url)
         api_version = kwargs.pop("api_version", None) or os.environ.get(
             "AZURE_OPENAI_API_VERSION", "2024-10-21"
         )
@@ -157,11 +201,22 @@ def create_llm_provider(
 
     from nmafc.integration.openai_provider import OpenAIProvider
 
-    resolved_url = base_url or PROVIDER_BASE_URLS.get(provider)
+    openai_base_url: str | None = base_url or (
+        # azure_v1 is env-derived, so resolve it at call time: the module-level
+        # dict captured the import-time value, which goes stale within one
+        # process that changes AZURE_OPENAI_ENDPOINT between calls.
+        os.environ.get("AZURE_OPENAI_ENDPOINT", "")
+        if provider == "azure_v1" else PROVIDER_BASE_URLS.get(provider)
+    )
+    if provider == "azure_v1" and not openai_base_url:
+        raise ProviderNotConfiguredError(
+            "The 'azure_v1' route needs an endpoint: set AZURE_OPENAI_ENDPOINT "
+            "in your environment, or pass base_url=... to the constructor."
+        )
     return OpenAIProvider(
         model=model,
         api_key=resolved_key,
-        base_url=resolved_url,
+        base_url=openai_base_url,
         **kwargs,
     )
 
@@ -190,12 +245,12 @@ def create_embedding_provider(
         create_embedding_provider("bedrock/amazon.titan-embed-text-v2:0")
     """
     provider, model = _parse_provider_model(provider_model)
-    resolved_key = _get_api_key(provider, api_key)
+    resolved_key = _require_api_key(provider, _get_api_key(provider, api_key))
 
     if provider == "azure":
         from nmafc.integration.azure_provider import AzureOpenAIEmbedding
 
-        resolved_url = base_url or os.environ.get("AZURE_OPENAI_ENDPOINT", "")
+        resolved_url = _require_azure_endpoint(provider, base_url)
         api_version = kwargs.pop("api_version", None) or os.environ.get(
             "AZURE_OPENAI_API_VERSION", "2024-10-21"
         )
@@ -220,13 +275,18 @@ def create_embedding_provider(
 
         return FastEmbedProvider(model_name=model, **kwargs)
 
-    resolved_url = base_url or PROVIDER_BASE_URLS.get(provider)
+    openai_base_url: str | None = base_url or PROVIDER_BASE_URLS.get(provider)
+    if provider == "azure_v1" and not openai_base_url:
+        raise ProviderNotConfiguredError(
+            "The 'azure_v1' route needs an endpoint: set AZURE_OPENAI_ENDPOINT "
+            "in your environment, or pass base_url=... to the constructor."
+        )
 
     from nmafc.integration.openai_provider import OpenAIEmbedding
 
     return OpenAIEmbedding(
         model=model,
         api_key=resolved_key,
-        base_url=resolved_url,
+        base_url=openai_base_url,
         **kwargs,
     )

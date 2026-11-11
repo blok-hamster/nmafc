@@ -5,6 +5,7 @@ import json
 import os
 from typing import Any, cast
 
+from nmafc.exceptions import MissingExtraError
 from nmafc.integration.base import EmbeddingProvider, LLMProvider
 from nmafc.schemas.memory import MemoryStateUpdate, UnifiedMemoryPayload
 
@@ -76,7 +77,10 @@ class OpenAIProvider(LLMProvider):
         try:
             from openai import AsyncOpenAI
         except ImportError as e:
-            raise ImportError("Install openai: pip install nmafc[llm]") from e
+            raise MissingExtraError(
+                "The openai SDK is required for this provider: "
+                "pip install 'nmafc[llm]'"
+            ) from e
 
         self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=90.0)
         self._model = model
@@ -190,7 +194,10 @@ class OpenAIEmbedding(EmbeddingProvider):
         try:
             from openai import AsyncOpenAI
         except ImportError as e:
-            raise ImportError("Install openai: pip install nmafc[llm]") from e
+            raise MissingExtraError(
+                "The openai SDK is required for this provider: "
+                "pip install 'nmafc[llm]'"
+            ) from e
 
         self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
         self._model = model
