@@ -1,0 +1,74 @@
+OpenLoft / NMAFC
+Copyright (c) 2026 Osamudiamen Edogun and Joshua Obigwe
+
+This product includes software developed by the NMAFC contributors.
+
+Licensed under the PolyForm Noncommercial License 1.0.0. See LICENSE for the
+full grant. NMAFC is free for any non-commercial use - personal projects,
+research, education, and non-profit or government work. Commercial use
+requires a separate licence from the maintainers.
+
+--------------------------------------------------------------------------------
+
+THIRD-PARTY ATTRIBUTION
+
+1. LoCoMo benchmark dataset
+   ------------------------
+   The benchmark result artifacts under
+   `scripts/benchmarks/results/` contain derived measurements that embed
+   verbatim question and gold-answer text from the LoCoMo dataset:
+
+       Source:      "Evaluating Very Long-Term Conversational Memory of
+                    LLM Agents" — Maharana, Sapkota, Kalyan, Liu, Hamdi,
+                    Rajani, Fung, Io, Maheshwari, Goyal, Narasimhan,
+                    Joty (2024), arXiv:2402.17753
+       Retrieved:   huggingface.co/datasets/KimmoZZZ/locomo (locomo10.json)
+       Licence:     Creative Commons Attribution-NonCommercial 4.0
+                    (CC BY-NC 4.0) — NOT OSI-approved, NON-COMMERCIAL
+       Retrieved:   at runtime via `huggingface_hub.hf_hub_download`;
+                    see `scripts/benchmarks/datasets/locomo_loader.py`
+
+   CC BY-NC 4.0 obligations:
+
+     a. Attribution and licence identification must accompany any
+        redistribution or derivative reporting. Do not strip the
+        `locomo_all.json` provenance fields when summarising results.
+
+     b. NonCommercial. The underlying dataset may not be used for
+        commercial purposes. Reporting aggregate benchmark measurements is
+        treated as a statement of fact and is not a derivative work of the
+        data; however, DISTRIBUTING the verbatim questions and gold answers
+        — which the committed result JSONs do — IS redistribution of
+        NonCommercial-licensed content.
+
+     c. Commercial constraint on product use: a customer running LoCoMo
+        as part of a procurement evaluation is a non-commercial use of the
+        dataset. NMAFC therefore does NOT ship a LoCoMo-backed evaluation
+        harness as a commercial product. Enterprise evaluation bundles ship
+        with synthetic datasets or customer-supplied corpora.
+
+   Review status: PENDING COUNSEL. See G0.6 in
+   `pixel_bots/loft_mem/docs/ENTERPRISE_TIER_IMPLEMENTATION_PLAN.md`.
+   Before any external circulation, confirm with counsel whether the
+   committed result artifacts should be retained with full attribution or
+   replaced with a redacted form (scored outcomes retained, verbatim text
+   removed).
+
+--------------------------------------------------------------------------------
+
+2. Third-party runtime dependencies
+   --------------------------------
+   NMAFC depends on third-party packages distributed under their own terms,
+   including (non-exhaustive): pydantic, lancedb, pyarrow, numpy, tomli,
+   openai, anthropic, boto3, psycopg2-binary, fastapi, uvicorn, websockets,
+   rich, python-dotenv, mcp, huggingface-hub, pandas, plotly, kaleido,
+   rouge-score.
+
+   `uv.lock` is the authoritative resolved dependency set and should be
+   regenerated (`uv lock`) before any release. As of the licensing commit it
+   was stale and did not include the `mcp` package.
+
+   No third-party code is vendored into this repository. The `registry/`,
+   `patchers/`, `skills/` and `plugins/` paths are customer-supplied runtime
+   content, bind-mounted read-only into agent containers, and are not
+   distributed as part of the NMAFC source distribution.

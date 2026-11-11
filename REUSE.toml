@@ -1,0 +1,78 @@
+# REUSE 3.3 licensing metadata for NMAFC.
+#
+# SPDX identifiers for this project live here rather than in per-file headers,
+# because the repository contains two different licences and conflating them
+# would misrepresent the benchmark data.
+#
+# Verify with:  python -m reuse lint
+#
+# See NOTICE for third-party attribution and the LoCoMo CC BY-NC 4.0 obligations.
+
+version = 1
+SPDX-PackageName = "nmafc"
+SPDX-PackageSupplier = "Osamudiamen Edogun <edogunosamudiamen@gmail.com>; Joshua Obigwe <josicoded@gmail.com>"
+SPDX-PackageDownloadLocation = "https://github.com/blok-hamster/nmafc"
+
+# ---------------------------------------------------------------------------
+# The software: PolyForm Noncommercial 1.0.0. Applies to every path by default.
+# `precedence = "aggregate"` lets the more specific blocks below add to, rather
+# than replace, this.
+#
+# PolyForm Noncommercial 1.0.0 grants everyone a copyright and patent licence
+# for any NON-COMMERCIAL purpose - personal projects, research, education,
+# non-profit and government use. Commercial use requires a separate licence
+# from the maintainers. PolyForm is source-available, NOT OSI-approved; the
+# SPDX identifier is PolyForm-Noncommercial-1.0.0.
+# ---------------------------------------------------------------------------
+[[annotations]]
+path = "**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Osamudiamen Edogun and Joshua Obigwe"
+SPDX-License-Identifier = "PolyForm-Noncommercial-1.0.0"
+
+# ---------------------------------------------------------------------------
+# Benchmark result artefacts carry TWO licences.
+#
+# The JSON files under scripts/benchmarks/results/ contain VERBATIM LoCoMo
+# questions and gold answers. LoCoMo is licensed CC BY-NC 4.0 - NON-COMMERCIAL.
+# Marking these PolyForm Noncommercial alone would be a licence misstatement,
+# and would also hide the dataset restriction from anyone auditing the
+# repository.
+#
+# Aggregating these two blocks with the one above yields the correct SPDX
+# expression, PolyForm-Noncommercial-1.0.0 AND CC-BY-NC-4.0: the harness and
+# summariser are our PolyForm Noncommercial code, and the embedded dataset
+# content is CC-BY-NC-4.0.
+#
+# Additional non-commercial obligations a licence identifier cannot express -
+# including the prohibition on shipping a LoCoMo-backed evaluation harness as a
+# commercial product - are stated in NOTICE section 1.
+# ---------------------------------------------------------------------------
+[[annotations]]
+path = [
+    "scripts/benchmarks/results/**",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Osamudiamen Edogun and Joshua Obigwe"
+SPDX-License-Identifier = "PolyForm-Noncommercial-1.0.0"
+
+[[annotations]]
+path = [
+    "scripts/benchmarks/results/**",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Maharana et al. 2024, arXiv:2402.17753 (LoCoMo dataset)"
+SPDX-License-Identifier = "CC-BY-NC-4.0"
+
+# ---------------------------------------------------------------------------
+# Third-party PDFs cached for research reading. Not vendored, not redistributed
+# as part of the source distribution, and not tracked by git. Listed so that if
+# any are ever added, their provenance is known before it becomes a problem.
+# ---------------------------------------------------------------------------
+[[annotations]]
+path = [
+    ".agent/papers/**",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Third-party authors; see NOTICE section 2"
+SPDX-License-Identifier = "LicenseRef-ThirdParty-Research-Papers"

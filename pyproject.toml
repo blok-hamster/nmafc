@@ -3,8 +3,31 @@ name = "nmafc"
 version = "0.1.0"
 description = "Neuromorphic Memory Architecture for Conversational AI - A biologically-inspired state-based memory wrapper for LLM agents"
 readme = "README.md"
+license = "PolyForm-Noncommercial-1.0.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [
-    { name = "blok-hamster", email = "josicoded@gmail.com" }
+    { name = "Osamudiamen Edogun", email = "edogunosamudiamen@gmail.com" },
+    { name = "Joshua Obigwe", email = "josicoded@gmail.com" },
+]
+maintainers = [
+    { name = "Osamudiamen Edogun", email = "edogunosamudiamen@gmail.com" },
+]
+keywords = [
+    "llm", "memory", "agent", "retrieval", "decay", "long-term-memory",
+    "temporal-reasoning", "knowledge-graph", "mcp",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "License :: Free for non-commercial use",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
 ]
 requires-python = ">=3.11"
 dependencies = [
@@ -14,6 +37,13 @@ dependencies = [
     "numpy>=1.24",
     "tomli>=2.0;python_version<'3.12'",
 ]
+
+[project.urls]
+Homepage = "https://github.com/blok-hamster/nmafc"
+Repository = "https://github.com/blok-hamster/nmafc"
+Issues = "https://github.com/blok-hamster/nmafc/issues"
+Changelog = "https://github.com/blok-hamster/nmafc/blob/main/CHANGELOG.md"
+"Benchmark Artifacts" = "https://github.com/blok-hamster/nmafc/tree/main/scripts/benchmarks/results"
 
 [project.optional-dependencies]
 llm = [

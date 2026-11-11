@@ -67,3 +67,31 @@ question text against `locomo_all.json` is a trap the column names invite —
 - Nothing below roughly 800 questions in this benchmark has survived being
   re-measured at full scale. Four separate results were mispriced by a small
   sample before that rule was adopted.
+
+## Dataset licence and attribution
+
+The JSON files in this directory contain **verbatim LoCoMo questions and gold
+answers**. That is redistribution of third-party content and it carries
+obligations.
+
+> **LoCoMo** — Maharana, Sapkota, Kalyan, Liu, Hamdi, Rajani, Fung, Io,
+> Maheshwari, Goyal, Narasimhan, Joty (2024). *"Evaluating Very Long-Term
+> Conversational Memory of LLM Agents."* arXiv:2402.17753.
+> Retrieved at runtime from `huggingface.co/datasets/KimmoZZZ/locomo`.
+> **Licence: Creative Commons Attribution-NonCommercial 4.0 (CC BY-NC 4.0)** —
+> non-commercial, not OSI-approved.
+
+Do not strip the per-row provenance fields when summarising or re-publishing
+results. Attribution and licence identification must accompany redistribution.
+
+**Non-commercial constraint on this project:** a customer running LoCoMo as part
+of a procurement evaluation is a non-commercial use of the dataset. NMAFC
+therefore does not ship a LoCoMo-backed evaluation harness as a commercial
+product. Enterprise evaluation bundles ship with synthetic data or a
+customer-supplied corpus.
+
+> **Review status: PENDING COUNSEL.** Before external release, confirm whether
+> these committed artefacts should be retained with full attribution as above, or
+> replaced with a redacted form — scored outcomes retained, verbatim question and
+> gold text removed. Tracked as G0.6 in
+> `pixel_bots/loft_mem/docs/ENTERPRISE_TIER_IMPLEMENTATION_PLAN.md`.

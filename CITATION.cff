@@ -1,0 +1,83 @@
+# Citation metadata for NMAFC.
+#
+# NOTE: there is deliberately NO `preferred-citation` entry. No paper, preprint,
+# or submission for NMAFC exists. Adding one would imply peer-reviewed
+# scientific validation that does not exist. This file cites the SOFTWARE only.
+#
+# If a paper is published, add `preferred-citation` at that time.
+#
+# The LoCoMo benchmark dataset used in the reported results is a SEPARATE work
+# with its own citation and a non-commercial licence. See NOTICE and the entry
+# below — do not conflate the two.
+
+cff-version: 1.2.0
+message: "If you use NMAFC in academic work, please cite the software and the version you used."
+title: "NMAFC: Neuromorphic Memory Architecture for Conversational AI"
+abstract: >-
+  A two-tier, biologically-inspired memory substrate for LLM agents. Conversation
+  turns are compacted at write time into atomic assertions with resolved absolute
+  temporal anchors and entity links; working memory decays exponentially per
+  conversational turn and consolidates through long-term potentiation into a
+  searchable cold archive. Retrieval fuses dense, lexical, and graph-expansion
+  channels by reciprocal rank fusion and hydrates a dual-layer context of
+  compacted facts plus verbatim source turns. Distributed under
+  PolyForm-Noncommercial-1.0.0 (non-commercial use only).
+type: software
+version: 0.1.0
+date-released: "2026-10-02"
+license: PolyForm-Noncommercial-1.0.0
+
+authors:
+  - family-names: Edogun
+    given-names: Osamudiamen
+    email: edogunosamudiamen@gmail.com
+    orcid: ""
+  - family-names: Obigwe
+    given-names: Joshua
+    email: josicoded@gmail.com
+    orcid: ""
+
+repository-code: "https://github.com/blok-hamster/nmafc"
+url: "https://github.com/blok-hamster/nmafc"
+keywords:
+  - large language models
+  - agent memory
+  - long-term memory
+  - temporal reasoning
+  - retrieval
+  - knowledge graph
+  - context management
+
+# ---------------------------------------------------------------------------
+# Benchmark dataset referenced by the reported results.
+#
+# This is a citation for the DATASET only. Reporting aggregate measurements
+# derived from it does not make those measurements the dataset authors' work.
+# See NOTICE section 1 for the CC BY-NC 4.0 obligations.
+# ---------------------------------------------------------------------------
+references:
+  - type: dataset
+    title: >-
+      LoCoMo: Evaluating Very Long-Term Conversational Memory of LLM Agents
+    authors:
+      - family-names: Maharana
+        given-names: Krishna
+      - family-names: Sapkota
+        given-names: Rahul
+      - family-names: Liu
+        given-names: Yanqi
+      - family-names: Hamdi
+        given-names: Abhimanyu
+      - family-names: Rajani
+        given-names: Najib
+      - family-names: Fung
+        given-names: Yi
+      - family-names: Joty
+        given-names: Shital
+    year: 2024
+    doi: "10.48550/arXiv.2402.17753"
+    url: "https://arxiv.org/abs/2402.17753"
+    license: "CC-BY-NC-4.0"
+    notes: >-
+      Retrieved at runtime from the HuggingFace Hub; not vendored into this
+      repository.

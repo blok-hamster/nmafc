@@ -1971,4 +1971,31 @@ thousands of tiny files and dominate ingestion time.
 
 ## License
 
-MIT
+**PolyForm Noncommercial 1.0.0.** See [`LICENSE`](LICENSE) for the full grant.
+NMAFC is free to use, modify, and distribute for any **non-commercial**
+purpose — personal projects, research, education, and non-profit or
+government work. Commercial use, including offering it as part of a paid
+product or service, requires a separate licence from the maintainers.
+
+Third-party attribution, including the **CC BY-NC 4.0** licence on the LoCoMo
+benchmark dataset referenced by the results above, is in [`NOTICE`](NOTICE).
+
+Contributions are accepted under the
+[Contributor License Agreement](CONTRIBUTOR_LICENSE_AGREEMENT.md).
+
+## Status
+
+Research-grade. See [`SECURITY.md`](SECURITY.md) for the current security
+posture and the known gaps that matter before you deploy this anywhere reachable.
+The web server defaults open and the authorisation model is not tenant-scoped;
+bind to localhost or front it with an authenticating proxy.
+
+The benchmark numbers in this README are reproducible with no API credentials:
+
+```bash
+python scripts/benchmarks/results/paired_2026_09_10/summarise.py
+```
+
+They are reproduced honestly, including the category where this system loses.
+Read the results section rather than quoting a headline number in isolation —
+the overall lead is not statistically significant, and that is stated below.
