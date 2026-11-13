@@ -81,6 +81,20 @@ class Note(BaseModel):
         return f"{self.path}::{self.symbol}" if self.symbol else self.path
 
 
+def _fold(word: str) -> str:
+    """Fold a plural onto its singular, so `caps` matches `cap` and `patches`, `patch`.
+
+    Deliberately crude: it only has to be applied the same way to notes and to
+    questions. A real stemmer would conflate more, and conflating identifiers
+    is how a lexical search starts returning things nobody asked for.
+    """
+    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+        if word.endswith(("ches", "shes", "xes", "zes")):
+            return word[:-2]
+        return word[:-1]
+    return word
+
+
 def _terms(text: str) -> list[str]:
     """Identifier sub-words, so `has_text_frame` and `hasTextFrame` both match `frame`."""
     out: list[str] = []
@@ -88,8 +102,18 @@ def _terms(text: str) -> list[str]:
         for part in _WORD.findall(ident):
             part = part.lower()
             if len(part) > 1 and part not in _STOP:
-                out.append(part)
+                out.append(_fold(part))
     return out
+
+
+# A note is returned only if it covers at least this share of the question's
+# words, weighted by how rare each word is across the notes. Without it, one
+# common word in common ("patch", "test") was enough to return several
+# unrelated notes for a question the store knew nothing about. 0.3 comes from
+# a small probe (12 questions over 16 notes: relevant notes covered 0.33-1.00,
+# loose matches on unanswerable questions 0.11-0.21), so treat it as a starting
+# point and not as a tuned constant.
+DEFAULT_MIN_COVERAGE = 0.3
 
 
 def default_notes_file(root: Path | str) -> Path:
@@ -212,11 +236,13 @@ class NoteStore:
     # --- reading --------------------------------------------------------
 
     def search(self, query: str = "", path: str | None = None, symbol: str | None = None,
-               top_k: int = 8) -> list[tuple[Note, str, float]]:
+               top_k: int = 8,
+               min_coverage: float = DEFAULT_MIN_COVERAGE) -> list[tuple[Note, str, float]]:
         """Notes matching a question and/or an anchor, as (note, status, score).
 
         Fresh notes come before stale and missing ones, then by score. With no
-        query the anchor filter alone decides, newest first.
+        query the anchor filter alone decides, newest first. A note that covers
+        less than `min_coverage` of the question's words is not returned.
         """
         pool = list(self.notes.values())
         if path:
@@ -232,7 +258,9 @@ class NoteStore:
         if wanted:
             docs = [_terms(f"{n.text} {n.path} {n.symbol}") for n in pool]
             scores = _bm25(docs, wanted)
-            ranked = [(n, s) for n, s in zip(pool, scores) if s > 0]
+            cover = _coverage(docs, wanted)
+            ranked = [(n, s) for n, s, c in zip(pool, scores, cover)
+                      if s > 0 and c >= min_coverage]
         elif query.strip():
             ranked = []          # a query made only of stop words matches nothing
         else:
@@ -252,6 +280,24 @@ def _neg_time(stamp: str) -> float:
         return -datetime.fromisoformat(stamp).timestamp()
     except ValueError:
         return 0.0
+
+
+def _coverage(docs: list[list[str]], query: list[str]) -> list[float]:
+    """Share of the question each note covers, weighting rare words above common ones.
+
+    A word that appears in no note at all carries the most weight, which is the
+    point: a question whose most specific word is unknown to the store should
+    not be answered by notes that merely share its ordinary words.
+    """
+    n = len(docs)
+    sets = [set(doc) for doc in docs]
+    df: Counter[str] = Counter()
+    for seen in sets:
+        df.update(seen)
+    words = set(query)
+    weight = {w: math.log(1 + (n - df[w] + 0.5) / (df[w] + 0.5)) for w in words}
+    total = sum(weight.values()) or 1.0
+    return [sum(weight[w] for w in words & seen) / total for seen in sets]
 
 
 def _bm25(docs: list[list[str]], query: list[str], k1: float = 1.2, b: float = 0.75) -> list[float]:

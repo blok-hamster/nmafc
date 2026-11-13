@@ -18,6 +18,10 @@ from the git history so the release trail is continuous.
   its anchor still hashes to what it did, `stale` once it does not, and
   `missing` if the anchor is gone. Stale notes are returned flagged, after
   fresh ones. Notes live in the NMAFC data directory, never in the repository.
+  Recall has a relevance bar (`min_coverage`, default 0.3): a note must cover
+  that share of the question's words, rare words counting for more, so a
+  question the notes know nothing about returns nothing. Plurals fold onto
+  singulars. The default comes from a 12-question probe, not a benchmark.
 - MCP tool `symbol_context`: the source of the symbols a question names plus
   their callers and callees, under a hard token budget. This exposes the
   existing budgeted renderer, which no tool reached before.

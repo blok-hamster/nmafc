@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from nmafc.code.index import DEFAULT_IGNORE, SymbolIndex
-from nmafc.code.notes import FRESH, NoteStore, render_notes
+from nmafc.code.notes import DEFAULT_MIN_COVERAGE, FRESH, NoteStore, render_notes
 from nmafc.code.render import pointer, render_symbols, tokens
 from nmafc.storage.config import NMafcConfig
 from nmafc.wrapper import SyncNeuromorphicMemory
@@ -202,10 +202,16 @@ def note_recall_tool(
     repo_path: str | None = None,
     max_tokens: int = 800,
     top_k: int = 8,
+    min_coverage: float = DEFAULT_MIN_COVERAGE,
 ) -> dict:
-    """Notes matching a question and/or an anchor, with exact staleness."""
+    """Notes matching a question and/or an anchor, with exact staleness.
+
+    `min_coverage` is the relevance bar: a note must cover at least that share
+    of the question's words (rare words count for more) to be returned.
+    """
     store = _notes(stores, repo_path)
-    rows = store.search(query, path=path, symbol=symbol, top_k=top_k)
+    rows = store.search(query, path=path, symbol=symbol, top_k=top_k,
+                        min_coverage=min_coverage)
     context, shown = render_notes(rows, max_tokens)
     return {
         "context": context,
@@ -431,10 +437,14 @@ def create_server() -> FastMCP:
         repo_path: str | None = None,
         max_tokens: int = 800,
         top_k: int = 8,
+        min_coverage: float = DEFAULT_MIN_COVERAGE,
     ) -> dict:
         """Saved findings matching a question and/or a file or symbol, each
-        marked fresh or stale by an exact hash check, under a token budget."""
-        return note_recall_tool(notes, query, path, symbol, repo_path, max_tokens, top_k)
+        marked fresh or stale by an exact hash check, under a token budget.
+        Returns nothing when no note covers enough of the question."""
+        return note_recall_tool(
+            notes, query, path, symbol, repo_path, max_tokens, top_k, min_coverage,
+        )
 
     return mcp
 

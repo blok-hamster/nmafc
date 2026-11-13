@@ -100,6 +100,32 @@ def test_search_is_lexical_and_returns_nothing_for_an_unrelated_question(store: 
     assert store.search("the of and") == []          # stop words only
 
 
+def test_one_common_word_in_common_is_not_a_match(store: NoteStore):
+    """Found by re-running the agent A/B: a question about a file no note covers still
+    got four notes back, because each shared an ordinary word like 'patch' with it."""
+    store.add("The patch column is reversed for swesmith rows.", "a.py", "foo")
+    store.add("A candidate patch counts as resolved only if every failing test passes.",
+              "a.py", "Box.get")
+    store.add("Buggy checkouts are kept with local branches.", "data.txt")
+
+    # 'patch' is in two notes; the specific words (xpu, trainer, night) are in none.
+    assert store.search("xpu_patch patches night_trainer") == []
+    assert store.search("What does xpu_patch.py do and does night_trainer.py use it?") == []
+
+    # The same store still answers a question it does cover.
+    hits = store.search("is the patch column reversed for swesmith rows")
+    assert [n.symbol for n, _, _ in hits][:1] == ["foo"]
+
+    # The bar is a parameter: at zero, any shared word matches again.
+    assert len(store.search("xpu_patch patches night_trainer", min_coverage=0.0)) == 2
+
+
+def test_plurals_fold_onto_singulars(store: NoteStore):
+    store.add("Retry ladder caps at sixty seconds; patches are applied in order.", "a.py", "foo")
+    assert len(store.search("retry cap")) == 1
+    assert len(store.search("patch order")) == 1
+
+
 def test_identifier_subwords_match(store: NoteStore):
     store.add("has_text_frame reads the wrong attribute.", "a.py", "foo")
     assert len(store.search("hasTextFrame")) == 1
