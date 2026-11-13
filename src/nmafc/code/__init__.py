@@ -25,7 +25,8 @@ and can be re-run on every edit rather than nightly.
 """
 
 from nmafc.code.index import SymbolIndex
+from nmafc.code.notes import Note, NoteStore, render_notes
 from nmafc.code.render import render_symbols
 from nmafc.code.symbols import parse_source
 
-__all__ = ["SymbolIndex", "parse_source", "render_symbols"]
+__all__ = ["Note", "NoteStore", "SymbolIndex", "parse_source", "render_notes", "render_symbols"]

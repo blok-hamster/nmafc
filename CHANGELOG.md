@@ -10,7 +10,32 @@ from the git history so the release trail is continuous.
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+
+- **Anchored notes** (`nmafc.code.notes`, MCP tools `note_add` / `note_recall`).
+  Findings about code are stored exactly as written, with no model call and no
+  embedding, each anchored to a file or to one symbol. A note is `fresh` while
+  its anchor still hashes to what it did, `stale` once it does not, and
+  `missing` if the anchor is gone. Stale notes are returned flagged, after
+  fresh ones. Notes live in the NMAFC data directory, never in the repository.
+- MCP tool `symbol_context`: the source of the symbols a question names plus
+  their callers and callees, under a hard token budget. This exposes the
+  existing budgeted renderer, which no tool reached before.
+- `memory_recall` (MCP): `max_tokens` caps the returned context; `min_score` is
+  a relevance floor that returns an empty context and `relevant: false` when
+  nothing scores above it; the reply now carries `token_estimate`.
+- `memory_remember` (MCP): `occurred_at`, defaulting to today's UTC date.
+
+### Changed
+
+- `memory_recall` (MCP) no longer repeats each fact's text in `top_hits`, which
+  roughly doubled the reply. Pass `include_facts=true` for the old shape.
+
+### Not measured
+
+- Whether anchored notes or `symbol_context` make an agent cheaper or more
+  accurate on real coding tasks. The mechanisms are exact and unit-tested; the
+  benefit is a hypothesis until there is a benchmark behind it.
 
 ## [0.2.0] — unreleased
 
